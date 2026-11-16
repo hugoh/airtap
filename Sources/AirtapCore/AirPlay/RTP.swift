@@ -20,10 +20,6 @@ enum NTP {
     static func fromTimestamp(_ timestamp: UInt64, rate: UInt64) -> UInt64 { ((timestamp << 16) / rate) << 16 }
 }
 
-struct RTPError: Error, CustomStringConvertible {
-    let description: String
-}
-
 private extension Data {
     mutating func appendBigEndian<T: FixedWidthInteger>(_ value: T) {
         Swift.withUnsafeBytes(of: value.bigEndian) { append(contentsOf: $0) }
@@ -42,7 +38,7 @@ enum RTP {
 
     /// Answers a 32 byte timing request: echoes the sender's transmit time and stamps receive and send with now.
     static func timingResponse(to request: Data, receivedSeconds: UInt32, receivedFraction: UInt32) throws -> Data {
-        guard request.count >= 32 else { throw RTPError(description: "timing request too short (\(request.count) bytes)") }
+        guard request.count >= 32 else { throw AirPlayError(description: "timing request too short (\(request.count) bytes)") }
         let base = request.startIndex
         var packet = Data([request[base], 0xD3, 0x00, 0x07, 0, 0, 0, 0])
         packet += request[base + 24 ..< base + 32]

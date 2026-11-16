@@ -1,9 +1,5 @@
 import Foundation
 
-struct HTTPError: Error, CustomStringConvertible {
-    let description: String
-}
-
 struct HTTPResponse {
     let code: Int
     let headers: [String: String]
@@ -37,16 +33,16 @@ enum HTTPMessage {
     /// Throws on input no speaker should send, so a broken or hostile peer cannot crash or stall the app.
     static func parseResponse(_ data: Data) throws -> (response: HTTPResponse, consumed: Int)? {
         guard let separator = data.range(of: Data("\r\n\r\n".utf8)) else {
-            guard data.count <= maxHeaderLength else { throw HTTPError(description: "response headers too large") }
+            guard data.count <= maxHeaderLength else { throw AirPlayError(description: "response headers too large") }
             return nil
         }
         guard let head = String(bytes: data[data.startIndex ..< separator.lowerBound], encoding: .utf8) else {
-            throw HTTPError(description: "response headers are not valid UTF-8")
+            throw AirPlayError(description: "response headers are not valid UTF-8")
         }
         let lines = head.components(separatedBy: "\r\n")
         let statusParts = lines[0].split(separator: " ", maxSplits: 2)
         guard statusParts.count >= 2, let code = Int(statusParts[1]) else {
-            throw HTTPError(description: "malformed status line: \(lines[0].prefix(80))")
+            throw AirPlayError(description: "malformed status line: \(lines[0].prefix(80))")
         }
         var headers: [String: String] = [:]
         for line in lines.dropFirst() {
@@ -55,7 +51,7 @@ enum HTTPMessage {
         }
         let declared = headers["content-length"] ?? "0"
         guard let length = Int(declared), (0...maxBodyLength).contains(length) else {
-            throw HTTPError(description: "invalid Content-Length: \(declared.prefix(32))")
+            throw AirPlayError(description: "invalid Content-Length: \(declared.prefix(32))")
         }
         let bodyStart = separator.upperBound
         guard data.endIndex - bodyStart >= length else { return nil }

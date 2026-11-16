@@ -52,7 +52,7 @@ final class PCMFeedTests: XCTestCase {
         let feed = PCMFeed(inputRate: 44100, maxBufferedSeconds: 0.1)
         push([Float](repeating: 0.9, count: 2 * 44100), into: feed)
         push([Float](repeating: -0.5, count: 2 * 4410), into: feed)
-        XCTAssertLessThanOrEqual(feed.bufferedFrames, 4410)
+        XCTAssertLessThanOrEqual(feed.stats.bufferedMilliseconds, 100)
         XCTAssertTrue(samples(feed.readPacket(frames: 352)).prefix(4).allSatisfy { $0 < 0 })
     }
 
@@ -60,8 +60,8 @@ final class PCMFeedTests: XCTestCase {
         let feed = PCMFeed(inputRate: 44100, prebufferSeconds: 0.1, maxBufferedSeconds: 1)
         push(sine(frames: 2205, rate: 44100), into: feed)
         XCTAssertEqual(feed.readPacket(frames: 352), silentPacket)
-        XCTAssertEqual(feed.bufferedFrames, 2205, "audio is kept while the cushion builds")
-        XCTAssertEqual(feed.underrunCount, 0, "waiting for the cushion is not an underrun")
+        XCTAssertEqual(feed.stats.bufferedMilliseconds, 50, "audio is kept while the cushion builds")
+        XCTAssertEqual(feed.stats.underruns, 0, "waiting for the cushion is not an underrun")
 
         push(sine(frames: 2646, rate: 44100, offset: 2205), into: feed)
         XCTAssertNotEqual(feed.readPacket(frames: 352), silentPacket)
@@ -71,11 +71,11 @@ final class PCMFeedTests: XCTestCase {
         let feed = PCMFeed(inputRate: 44100, prebufferSeconds: 0.1, maxBufferedSeconds: 1)
         push(sine(frames: 4410, rate: 44100), into: feed)
         for _ in 0..<20 { _ = feed.readPacket(frames: 352) }
-        XCTAssertEqual(feed.underrunCount, 1)
+        XCTAssertEqual(feed.stats.underruns, 1)
 
         push(sine(frames: 1000, rate: 44100), into: feed)
         XCTAssertEqual(feed.readPacket(frames: 352), silentPacket, "one glitch, then silence until the cushion is back")
-        XCTAssertEqual(feed.underrunCount, 1)
+        XCTAssertEqual(feed.stats.underruns, 1)
     }
 
     func testPlanarPushInterleavesChannels() {
@@ -95,7 +95,7 @@ final class PCMFeedTests: XCTestCase {
         _ = feed.readPacket(frames: 352)
 
         feed.reconfigure(inputRate: 44100)
-        XCTAssertEqual(feed.bufferedFrames, 0, "audio at the old rate is discarded")
+        XCTAssertEqual(feed.stats.bufferedMilliseconds, 0, "audio at the old rate is discarded")
         push(sine(frames: 44100, rate: 44100), into: feed)
         var output = Data()
         for _ in 0..<100 { output += feed.readPacket(frames: 352) }
@@ -123,33 +123,33 @@ final class PCMFeedTests: XCTestCase {
     func testChunkedRealTimeDeliveryNeverUnderruns() {
         let feed = PCMFeed(inputRate: 48000)
         simulate(seconds: 20, producerRate: 48000, feed: feed)
-        XCTAssertEqual(feed.underrunCount, 0)
-        XCTAssertEqual(feed.overflowCount, 0)
+        XCTAssertEqual(feed.stats.underruns, 0)
+        XCTAssertEqual(feed.stats.overflows, 0)
     }
 
     func testAFastSourceClockIsAbsorbedByDroppingFrames() {
         let feed = PCMFeed(inputRate: 48000)
         simulate(seconds: 600, producerRate: 48000 * 1.001, feed: feed)
-        XCTAssertEqual(feed.underrunCount, 0)
-        XCTAssertEqual(feed.overflowCount, 0, "drift must be corrected before the buffer overflows")
-        XCTAssertGreaterThan(feed.driftCorrections, 0)
+        XCTAssertEqual(feed.stats.underruns, 0)
+        XCTAssertEqual(feed.stats.overflows, 0, "drift must be corrected before the buffer overflows")
+        XCTAssertGreaterThan(feed.stats.driftCorrections, 0)
     }
 
     func testASlowSourceClockIsAbsorbedByRepeatingFrames() {
         let feed = PCMFeed(inputRate: 48000)
         simulate(seconds: 600, producerRate: 48000 * 0.999, feed: feed)
-        XCTAssertEqual(feed.underrunCount, 0, "drift must be corrected before the cushion runs dry")
-        XCTAssertEqual(feed.overflowCount, 0)
-        XCTAssertGreaterThan(feed.driftCorrections, 0)
+        XCTAssertEqual(feed.stats.underruns, 0, "drift must be corrected before the cushion runs dry")
+        XCTAssertEqual(feed.stats.overflows, 0)
+        XCTAssertGreaterThan(feed.stats.driftCorrections, 0)
     }
 
     func testBacklogWhileNothingIsReadIsNotReportedAsOverflow() {
         let feed = PCMFeed(inputRate: 44100, prebufferSeconds: 0.05, maxBufferedSeconds: 0.1)
         for _ in 0..<10 { push([Float](repeating: 0.1, count: 2 * 4410), into: feed) }
-        XCTAssertEqual(feed.overflowCount, 0, "before playback starts, dropping old audio is expected")
+        XCTAssertEqual(feed.stats.overflows, 0, "before playback starts, dropping old audio is expected")
 
         _ = feed.readPacket(frames: 352)
         for _ in 0..<10 { push([Float](repeating: 0.1, count: 2 * 4410), into: feed) }
-        XCTAssertGreaterThan(feed.overflowCount, 0, "during playback it means the reader fell behind")
+        XCTAssertGreaterThan(feed.stats.overflows, 0, "during playback it means the reader fell behind")
     }
 }

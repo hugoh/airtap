@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// HAP transient pairing: SRP with the fixed PIN every AirPlay 2 receiver accepts, without storing credentials.
@@ -23,7 +24,7 @@ enum AirPlayPairing {
             method: "POST", uri: "/pair-setup", headers: headers,
             body: TLV8.encode([(TLV8.sequence, Data([3])), (TLV8.publicKey, srp.publicKey), (TLV8.proof, result.proof)])
         )
-        guard let serverProof = try Self.pairingResponse(second)[TLV8.proof], Self.constantTimeEqual(serverProof, result.serverProof) else {
+        guard let serverProof = try Self.pairingResponse(second)[TLV8.proof], SymmetricKey(data: serverProof) == SymmetricKey(data: result.serverProof) else {
             throw AirPlayError(description: "speaker did not prove it knows the pairing secret")
         }
         link.sharedSecret = result.sessionKey
@@ -31,11 +32,6 @@ enum AirPlayPairing {
             hkdfExpand(salt: "Control-Salt", info: "Control-Write-Encryption-Key", secret: result.sessionKey),
             hkdfExpand(salt: "Control-Salt", info: "Control-Read-Encryption-Key", secret: result.sessionKey)
         )
-    }
-
-    private static func constantTimeEqual(_ left: Data, _ right: Data) -> Bool {
-        guard left.count == right.count else { return false }
-        return zip(left, right).reduce(UInt8(0)) { $0 | ($1.0 ^ $1.1) } == 0
     }
 
     private static func pairingResponse(_ response: HTTPResponse) throws -> [UInt8: Data] {

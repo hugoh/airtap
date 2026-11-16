@@ -57,6 +57,22 @@ final class AppCatalogTests: XCTestCase {
         XCTAssertEqual(listed.map(\.name), ["Music"])
     }
 
+    func testTheStreamedAppStaysListedEvenWhenItsAudioProcessIsGone() {
+        let listed = AppCatalog.listed(audio: audio([("com.apple.Music", false)]), running: running, keeping: "com.apple.Safari" )
+        XCTAssertEqual(listed.map(\.name), ["Music"], "an app that is not running at all cannot be listed by name")
+
+        let withSafari = running + [RunningApp(bundleID: "com.apple.Safari", name: "Safari")]
+        let kept = AppCatalog.listed(audio: audio([("com.apple.Music", false)]), running: withSafari, keeping: "com.apple.Safari")
+        XCTAssertEqual(kept.map(\.name), ["Music", "Safari"])
+        XCTAssertEqual(kept.last?.isPlaying, false)
+    }
+
+    func testKeepingDoesNotDuplicateAnAppThatIsAlreadyListed() {
+        let listed = AppCatalog.listed(audio: audio([("com.apple.Music", true)]), running: running, keeping: "com.apple.Music")
+        XCTAssertEqual(listed.map(\.name), ["Music"])
+        XCTAssertTrue(listed[0].isPlaying)
+    }
+
     func testPlayingAppsComeFirstThenAlphabetical() {
         let listed = AppCatalog.listed(
             audio: audio([("com.google.Chrome", false), ("com.apple.Music", false), ("com.electron.pocket-casts.helper", true)]),

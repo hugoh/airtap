@@ -115,6 +115,11 @@ public final class ReconnectingStream {
         condition.unlock()
     }
 
+    /// Doubles up to sixty times the base delay, so a speaker left off overnight is not searched for all night.
+    static func nextBackoff(after current: TimeInterval, base: TimeInterval) -> TimeInterval {
+        min(current * 2, base * 60)
+    }
+
     private func supervise() {
         var backoff = retryDelay
         while !isStopped {
@@ -149,7 +154,7 @@ public final class ReconnectingStream {
                 Log.info("session", "could not stream: \(error)")
                 publish(.reconnecting("\(error)"))
                 pause(backoff)
-                backoff = min(backoff * 2, max(retryDelay, 10))
+                backoff = Self.nextBackoff(after: backoff, base: retryDelay)
             }
         }
         condition.lock()

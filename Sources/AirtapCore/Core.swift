@@ -1,13 +1,6 @@
 import CoreAudio
 import Foundation
 
-public struct AirtapError: Error, CustomStringConvertible {
-    public let description: String
-    static func status(_ status: OSStatus, _ what: String) -> AirtapError {
-        AirtapError(description: "\(what) failed (OSStatus \(status))")
-    }
-}
-
 public struct OutputDevice: Identifiable, Hashable {
     public let id: AudioObjectID
     public let name: String
@@ -76,7 +69,7 @@ public func defaultOutput() throws -> OutputDevice {
     var id = AudioObjectID(kAudioObjectUnknown)
     var size = UInt32(MemoryLayout<AudioObjectID>.size)
     try Router.check(AudioObjectGetPropertyData(system, &addr, 0, nil, &size, &id), "read default output device")
-    guard let device = outputDevices().first(where: { $0.id == id }) else { throw AirtapError(description: "default output device not found") }
+    guard let device = outputDevices().first(where: { $0.id == id }) else { throw AirPlayError(description: "default output device not found") }
     return device
 }
 
@@ -93,6 +86,8 @@ public final class Router {
     }
 
     private static let maxRebuildRetries = 5
+    private var isMuted = false
+    private var isStopped = false
     private let formatLock = NSLock()
     private var currentFormat = AudioStreamBasicDescription()
     private var rebuildRetries = 0
@@ -123,7 +118,21 @@ public final class Router {
 
     public func stop() {
         removeListeners()
-        queue.sync { teardown() }
+        queue.sync {
+            isStopped = true
+            teardown()
+        }
+    }
+
+    /// Whether the app is silenced on this Mac while its audio is captured. Rebuilds the tap, since a tap's mute
+    /// behaviour is fixed when it is created.
+    public func setMuted(_ muted: Bool) {
+        queue.async { [self] in
+            guard !isStopped, muted != isMuted else { return }
+            isMuted = muted
+            Log.info("capture", muted ? "'\(bundleID)' is muted on this Mac while it streams" : "stream is down; '\(bundleID)' plays on this Mac again")
+            refresh(force: true)
+        }
     }
 
     private func removeListeners() {
@@ -148,12 +157,14 @@ public final class Router {
     }
 
     /// Runs on `queue` whenever the system's process list or default output device changes.
-    private func refresh() {
+    private func refresh(force: Bool = false) {
+        // A retry scheduled before `stop` must not bring the tap, and its mute, back to life.
+        guard !isStopped else { return }
         let processes = matchingProcesses()
         let clock = try? defaultOutput()
         let isWaiting = tappedProcesses.isEmpty
         if isWaiting, processes.isEmpty { return }
-        guard isWaiting || Set(processes) != tappedProcesses || clock?.uid != clockUID else { return }
+        guard force || isWaiting || Set(processes) != tappedProcesses || clock?.uid != clockUID else { return }
         let previousRate = format.mSampleRate
         teardown()
         guard !processes.isEmpty else {
@@ -161,7 +172,7 @@ public final class Router {
             return
         }
         do {
-            guard let clock else { throw AirtapError(description: "no default output device") }
+            guard let clock else { throw AirPlayError(description: "no default output device") }
             try build(processes: processes, clock: clock)
             rebuildRetries = 0
             Log.info("capture", "tap rebuilt: \(processes.count) process(es), clock '\(clock.name)', \(Int(format.mSampleRate)) Hz")
@@ -186,11 +197,11 @@ public final class Router {
     }
 
     private func build(processes: [AudioObjectID], clock: OutputDevice) throws {
-        guard !processes.isEmpty else { throw AirtapError(description: "no audio process matches '\(bundleID)' (is it playing?)") }
+        guard !processes.isEmpty else { throw AirPlayError(description: "no audio process matches '\(bundleID)' (is it playing?)") }
 
         let tapDescription = CATapDescription(stereoMixdownOfProcesses: processes)
         tapDescription.uuid = UUID()
-        tapDescription.muteBehavior = .mutedWhenTapped
+        tapDescription.muteBehavior = isMuted ? .mutedWhenTapped : .unmuted
         try Self.check(AudioHardwareCreateProcessTap(tapDescription, &tap), "create process tap (audio capture permission?)")
         var formatAddress = address(kAudioTapPropertyFormat)
         var formatSize = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
@@ -243,6 +254,6 @@ public final class Router {
     }
 
     static func check(_ status: OSStatus, _ what: String) throws {
-        if status != noErr { throw AirtapError.status(status, what) }
+        if status != noErr { throw AirPlayError.status(status, what) }
     }
 }

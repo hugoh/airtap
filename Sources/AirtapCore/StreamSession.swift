@@ -28,7 +28,7 @@ public final class StreamSession {
     private var router: Router?
     private var stream: ReconnectingStream?
     private var meter: DispatchSourceTimer?
-    private var observers: [NSObjectProtocol] = []
+    private var powerObserver: PowerObserver?
 
     public init(app: String, speaker: String, volume: Double = 30) {
         self.app = app
@@ -61,16 +61,21 @@ public final class StreamSession {
         }
         stream.onState = onState
         self.stream = stream
-        observePower()
-        startMeter(stream: stream, feed: feed, sampleRate: Int(format.mSampleRate))
+        powerObserver = PowerObserver(
+            onSleep: { Log.info("power", "system will sleep") },
+            onWake: { [weak stream] in
+                Log.info("power", "system woke; reconnecting")
+                stream?.restart(reason: "system woke from sleep")
+            }
+        )
+        startMeter(stream: stream, feed: feed, sampleRate: Int(format.mSampleRate), router: router)
         stream.start()
     }
 
     public func stop() {
         stream?.stop()
         meter?.cancel()
-        observers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
-        observers = []
+        powerObserver = nil
         router?.stop()
         router = nil
         stream = nil
@@ -93,27 +98,19 @@ public final class StreamSession {
 
     // MARK: Diagnostics
 
-    private func observePower() {
-        let center = NSWorkspace.shared.notificationCenter
-        observers.append(center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: nil) { _ in
-            Log.info("power", "system will sleep")
-        })
-        observers.append(center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: nil) { [weak self] _ in
-            Log.info("power", "system woke; reconnecting")
-            self?.stream?.restart(reason: "system woke from sleep")
-        })
-    }
-
-    private func startMeter(stream: ReconnectingStream, feed: PCMFeed, sampleRate: Int) {
+    private func startMeter(stream: ReconnectingStream, feed: PCMFeed, sampleRate: Int, router: Router) {
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "airtap.health"))
         timer.schedule(deadline: .now() + 1, repeating: 1)
         let tap = tap
         var reporter = HealthReporter(speakerName: speakerName)
-        timer.setEventHandler { [weak self] in
+        var mute = MutePolicy()
+        timer.setEventHandler { [weak self, weak router] in
             let level = tap.peak
             tap.peak = 0
             Log.debug("capture") { String(format: "input level %.3f", level) }
-            let health = reporter.report(connection: stream.connection, feed: feed.stats, inputLevel: level, sampleRate: sampleRate, now: Clock.now())
+            let connection = stream.connection
+            if let muted = mute.evaluate(streaming: connection.connectedSince != nil, now: Clock.now()) { router?.setMuted(muted) }
+            let health = reporter.report(connection: connection, feed: feed.stats, inputLevel: level, sampleRate: sampleRate, now: Clock.now())
             if let health, reporter.ticks % 5 == 0 { Log.debug("health") { health.summary } }
             self?.onHealth?(health)
         }
