@@ -1,0 +1,28 @@
+---
+name: Hk
+
+permissions: {}
+
+on: # yamllint disable-line rule:truthy
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  lint:
+    timeout-minutes: 15
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      packages: read
+      statuses: write
+    # SwiftLint needs SourceKit, which the macOS runners ship.
+    runs-on: macos-latest
+    steps:
+      - uses: hugoh/gh-workflows/setup@7d30b69fa8ffc72ed90e3ba09aa2ff977ef6328e # v1.40.21
+      - uses: hugoh/gh-workflows/hk-check@7d30b69fa8ffc72ed90e3ba09aa2ff977ef6328e # v1.40.21
+        env:
+          PINACT_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

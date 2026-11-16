@@ -1,0 +1,2 @@
+# Golden test vector derived from fixed inputs in scripts/gen_vectors.py; not a credential.
+Tests/AirtapCoreTests/Vectors.swift:generic-api-key:8

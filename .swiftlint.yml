@@ -1,0 +1,16 @@
+included:
+  - Sources
+  - Tests
+excluded:
+  - Tests/AirtapCoreTests/Vectors.swift
+line_length:
+  warning: 180
+  ignores_comments: true
+identifier_name:
+  min_length: 1
+function_body_length:
+  warning: 80
+type_body_length:
+  warning: 350
+trailing_comma:
+  mandatory_comma: true

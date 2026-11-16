@@ -1,0 +1,11 @@
+[project]
+name = "airtap-scripts"
+version = "0"
+requires-python = ">=3.10"
+
+# Mirrors the inline `# dependencies` of scripts/*.py so type checking sees the same packages.
+[dependency-groups]
+dev = ["pyatv==0.18.0", "srptools<2"]
+
+[tool.uv]
+package = false

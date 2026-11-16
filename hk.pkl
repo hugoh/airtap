@@ -1,0 +1,40 @@
+amends "package://github.com/jdx/hk/releases/download/v2.11.1/hk@2.11.1#/Config.pkl"
+import "package://github.com/jdx/hk/releases/download/v2.11.1/hk@2.11.1#/Builtins.pkl"
+import "package://github.com/hugoh/hk-config/releases/download/v3.1.3/hk-config@3.1.3#/base.pkl" as Base
+
+min_hk_version = Base.min_hk_version
+
+local linters = new Mapping<String, Step> {
+    ...Base.base
+    ...Base.python
+    ...Base.shell
+    ["uv-sync"] {
+        check = "uv sync"
+    }
+    // ty does not pick the project's virtualenv up by itself for scripts carrying inline metadata
+    ["ty"] = (Builtins.ty) {
+        check = "ty check --python .venv {{ files }}"
+        depends = List("uv-sync")
+    }
+    ["swiftlint"] = new Step {
+        glob = List("**/*.swift")
+        check = "swiftlint lint --strict --quiet --force-exclude {{ files }}"
+        fix = "swiftlint lint --fix --quiet --force-exclude {{ files }}"
+    }
+}
+
+steps = linters
+
+hooks {
+    ["pre-commit"] {
+        stash = "git"
+    }
+    ["pre-push"] {
+        steps = linters
+    }
+    ["commit-msg"] {
+        steps = new Mapping<String, Step> {
+            ...Base.commit_msg
+        }
+    }
+}
