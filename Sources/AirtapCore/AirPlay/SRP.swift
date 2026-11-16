@@ -2,10 +2,6 @@ import BigInt
 import CryptoKit
 import Foundation
 
-struct SRPError: Error, CustomStringConvertible {
-    let description: String
-}
-
 struct SRPResult {
     /// The client's proof, sent to the speaker.
     let proof: Data
@@ -49,7 +45,7 @@ struct SRPClient {
     mutating func process(serverPublic: Data, salt: Data) throws -> SRPResult {
         let n = Self.prime
         let b = BigUInt(serverPublic)
-        guard b % n != 0 else { throw SRPError(description: "invalid server public key") }
+        guard b % n != 0 else { throw AirPlayError(description: "invalid server public key") }
         let a = Self.generator.power(privateValue, modulus: n)
 
         let k = Self.hashInt(Self.minimal(n), Self.padded(Self.generator))

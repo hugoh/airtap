@@ -227,11 +227,6 @@ public final class PCMFeed: PCMSource {
         return body()
     }
 
-    public var bufferedFrames: Int { locked { count } }
-    var underrunCount: Int { locked { underruns } }
-    var overflowCount: Int { locked { overflows } }
-    var driftCorrections: Int { locked { corrections } }
-
     public var stats: FeedStats {
         converterLock.lock()
         let rate = inputFormat.sampleRate
