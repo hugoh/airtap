@@ -6,10 +6,23 @@ import SwiftUI
 final class Model: ObservableObject {
     static let logURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/airtap.log")
 
-    @Published var apps: [AudioApp] = []
+    private static let lastSpeakerKey = "lastSpeaker"
+    private static let iconSize = NSSize(width: 16, height: 16)
+
+    @Published var apps: [ListedApp] = []
     @Published var speakers: [Speaker] = []
     @Published var app = ""
-    @Published var speaker = ""
+    @Published var speaker = "" {
+        didSet {
+            // Only a person's own pick is worth remembering, not the default chosen after a scan.
+            guard !isApplyingSelection, speaker != oldValue else { return }
+            userChoseSpeaker = true
+            UserDefaults.standard.set(speaker, forKey: Self.lastSpeakerKey)
+        }
+    }
+    private(set) var icons: [String: NSImage] = [:]
+    private var userChoseSpeaker = false
+    private var isApplyingSelection = false
     @Published var volume = 30.0
     @Published var status = "Idle"
     @Published var isScanning = false
@@ -30,18 +43,38 @@ final class Model: ObservableObject {
     }
 
     func refresh() {
-        apps = audioApps().sorted { ($0.isPlaying ? 0 : 1, $0.bundleID) < ($1.isPlaying ? 0 : 1, $1.bundleID) }
-        if !apps.contains(where: { $0.bundleID == app }) { app = apps.first?.bundleID ?? "" }
+        refreshApps()
         guard !isScanning else { return }
         isScanning = true
         Thread.detachNewThread {
             let found = SpeakerDiscovery.discover(timeout: 4)
             DispatchQueue.main.async {
                 self.speakers = found
-                if !found.contains(where: { $0.name == self.speaker }) { self.speaker = found.first?.name ?? "" }
+                self.isApplyingSelection = true
+                let saved = UserDefaults.standard.string(forKey: Self.lastSpeakerKey)
+                self.speaker = SpeakerChoice.select(saved: saved, available: found.map(\.name), current: self.speaker, userChose: self.userChoseSpeaker)
+                self.isApplyingSelection = false
+                Log.info("app", "found \(found.count) speakers; selected '\(self.speaker)' (last used: '\(saved ?? "none")')")
                 self.isScanning = false
             }
         }
+    }
+
+    private func refreshApps() {
+        let running = NSWorkspace.shared.runningApplications.compactMap { application -> (RunningApp, NSImage?)? in
+            guard application.activationPolicy != .prohibited, let id = application.bundleIdentifier else { return nil }
+            return (RunningApp(bundleID: id, name: application.localizedName ?? id, isRegular: application.activationPolicy == .regular), application.icon)
+        }
+        apps = AppCatalog.listed(audio: audioApps(), running: running.map(\.0), excluding: Bundle.main.bundleIdentifier)
+        icons = [:]
+        for (app, icon) in running {
+            guard let image = icon?.copy() as? NSImage else { continue }
+            image.size = Self.iconSize
+            icons[app.bundleID] = image
+        }
+        Log.debug("app") { "apps with audio: \(self.apps.map { "\($0.name)\($0.isPlaying ? "*" : "")" }), icons for \(self.icons.count) running apps" }
+        // The app that was selected may have stopped making sound; keep it only if it is still listed.
+        if !apps.contains(where: { $0.bundleID == app }) { app = apps.first?.bundleID ?? "" }
     }
 
     func toggle() {
@@ -88,7 +121,14 @@ struct MenuView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Picker("App", selection: $model.app) {
-                ForEach(model.apps) { Text(($0.isPlaying ? "▶ " : "") + $0.bundleID).tag($0.bundleID) }
+                ForEach(model.apps) { app in
+                    Label {
+                        Text(app.name + (app.isPlaying ? "  ▶" : ""))
+                    } icon: {
+                        Image(nsImage: model.icons[app.bundleID] ?? NSImage())
+                    }
+                    .tag(app.bundleID)
+                }
             }
             .disabled(model.isStreaming)
             Picker("Speaker", selection: $model.speaker) {
@@ -124,7 +164,17 @@ struct MenuView: View {
 @main
 struct AirtapApp: App {
     /// Owned here, not by the popover's view, so a running stream stays reachable however the popover is rebuilt.
-    @StateObject private var model = Model()
+    @StateObject private var model: Model
+
+    init() {
+        // Scan at launch rather than when the popover is first opened, so the last speaker is already picked by then.
+        let model = MainActor.assumeIsolated {
+            let model = Model()
+            model.refresh()
+            return model
+        }
+        _model = StateObject(wrappedValue: model)
+    }
 
     var body: some Scene {
         MenuBarExtra("airtap", systemImage: "airplayaudio") { MenuView(model: model) }

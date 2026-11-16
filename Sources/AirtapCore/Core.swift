@@ -142,8 +142,9 @@ public final class Router {
     }
 
     private func matchingProcesses() -> [AudioObjectID] {
-        objectIDs(system, kAudioHardwarePropertyProcessObjectList)
-            .filter { string($0, kAudioProcessPropertyBundleID).localizedCaseInsensitiveContains(bundleID) }
+        let processes = objectIDs(system, kAudioHardwarePropertyProcessObjectList)
+        let bundleIDs = processes.map { string($0, kAudioProcessPropertyBundleID) }
+        return BundleMatch.indices(of: bundleIDs, matching: bundleID).map { processes[$0] }
     }
 
     /// Runs on `queue` whenever the system's process list or default output device changes.
