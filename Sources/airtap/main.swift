@@ -41,7 +41,7 @@ func tone(_ arguments: [String]) {
     }
     guard positional.count == 2, let port = UInt16(positional[1]) else { fail("usage: airtap tone <host> <port> [--seconds N] [--volume 0-100] [--amplitude 0-1] [--debug]") }
     let speaker = Speaker(name: "tone", host: positional[0], port: port)
-    let stream = ReconnectingStream(source: ToneSource(amplitude: min(max(amplitude, 0), 1)), volume: volume) { speaker }
+    let stream = ReconnectingStream(source: ToneSource(amplitude: min(max(amplitude, 0), 1)), volume: volume) { _ in speaker }
     let streaming = DispatchSemaphore(value: 0)
     stream.onState = { state in
         Log.info("state", "\(state)")

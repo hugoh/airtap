@@ -3,12 +3,22 @@ import XCTest
 
 private final class FakeSession: StreamingSession {
     var connectError: Error?
+    var blocksConnectUntilStopped = false
+    private let unblocked = DispatchSemaphore(value: 0)
+    private(set) var isConnecting = false
     private(set) var isStreaming = false
     private(set) var stopCount = 0
     private var onFailure: ((Error) -> Void)?
     private let lock = NSLock()
 
     func connect() throws {
+        if blocksConnectUntilStopped {
+            lock.lock()
+            isConnecting = true
+            lock.unlock()
+            unblocked.wait()
+            throw AirPlayError(description: "connection closed")
+        }
         if let connectError { throw connectError }
     }
 
@@ -24,6 +34,7 @@ private final class FakeSession: StreamingSession {
         stopCount += 1
         isStreaming = false
         lock.unlock()
+        unblocked.signal()
     }
 
     func failStream() {
@@ -42,16 +53,18 @@ final class ReconnectingStreamTests: XCTestCase {
     private var sessions: [FakeSession] = []
     private let lock = NSLock()
     private var nextConnectErrors: [Error?] = []
+    private var blockNextConnect = false
 
     private func makeStream() -> ReconnectingStream {
         ReconnectingStream(
             source: Silence(), volume: 30, retryDelay: 0.02,
-            resolve: { Speaker(name: "Test", host: "127.0.0.1", port: 1) },
+            resolve: { _ in Speaker(name: "Test", host: "127.0.0.1", port: 1) },
             makeSession: { [self] _ in
                 lock.lock()
                 defer { lock.unlock() }
                 let session = FakeSession()
                 if !nextConnectErrors.isEmpty { session.connectError = nextConnectErrors.removeFirst() }
+                session.blocksConnectUntilStopped = blockNextConnect
                 sessions.append(session)
                 return session
             }
@@ -136,5 +149,39 @@ final class ReconnectingStreamTests: XCTestCase {
         XCTAssertFalse(session(0).isStreaming)
         Thread.sleep(forTimeInterval: 0.2)
         XCTAssertEqual(sessionCount, 1, "nothing reconnects after stop")
+    }
+
+    func testStopInterruptsAConnectInProgressAndNothingStreams() {
+        blockNextConnect = true
+        let stream = makeStream()
+        stream.start()
+        waitUntil("connect is in progress") { sessionCount == 1 && session(0).isConnecting }
+
+        let started = Date()
+        stream.stop()
+
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1, "stop must not wait for the connect to time out")
+        Thread.sleep(forTimeInterval: 0.2)
+        XCTAssertFalse(session(0).isStreaming)
+        XCTAssertEqual(sessionCount, 1)
+    }
+
+    func testStopCancelsASlowSpeakerLookup() {
+        let lookupStarted = DispatchSemaphore(value: 0)
+        let stream = ReconnectingStream(
+            source: Silence(), volume: 30, retryDelay: 0.02,
+            resolve: { isCancelled in
+                lookupStarted.signal()
+                while !isCancelled() { Thread.sleep(forTimeInterval: 0.005) }
+                throw AirPlayError(description: "lookup cancelled")
+            },
+            makeSession: { _ in FakeSession() }
+        )
+        stream.start()
+        lookupStarted.wait()
+
+        let started = Date()
+        stream.stop()
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1)
     }
 }

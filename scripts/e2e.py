@@ -46,7 +46,12 @@ class FakeReceiver:
     while keeping the connection open, which is what a speaker that fell asleep looks like."""
 
     def __init__(
-        self, listener, drop_after=None, stall_after=None, request_retransmit=False
+        self,
+        listener,
+        drop_after=None,
+        stall_after=None,
+        request_retransmit=False,
+        feedback_status=200,
     ):
         self.listener = listener
         self.port = listener.getsockname()[1]
@@ -55,6 +60,7 @@ class FakeReceiver:
         self.stall_after = stall_after
         self.stalled = False
         self.request_retransmit = request_retransmit
+        self.feedback_status = feedback_status
         self.control_sock = None
         self.raw_packets = {}
         self.retransmit_request = None
@@ -335,7 +341,7 @@ class FakeReceiver:
                     self._respond(conn, protocol, cseq)
                 elif method == "POST" and uri == "/feedback":
                     self.feedback_count += 1
-                    self._respond(conn, protocol, cseq)
+                    self._respond(conn, protocol, cseq, code=self.feedback_status)
                 elif method == "RECORD":
                     self._respond(conn, protocol, cseq)
                     if self.drop_after:
@@ -664,9 +670,41 @@ def finish(sender):
         return sender.communicate()[1]
 
 
+def scenario_feedback_unsupported(report):
+    print(
+        "\n== Scenario 4: speaker answers keep-alives with an error status; the stream must stay up"
+    )
+    seconds = 7
+    receiver = FakeReceiver(new_listener(), feedback_status=501)
+    threading.Thread(target=receiver.serve, daemon=True).start()
+    process = run_sender(receiver.port, seconds, timeout=60)
+    time.sleep(0.5)
+    print_log_tail(process, 4)
+    log = process.stderr
+    expected = int(seconds * 44100 / 352)
+    report.check(
+        "sender exited cleanly", process.returncode == 0, f"exit {process.returncode}"
+    )
+    report.check(
+        "keep-alives were sent and rejected",
+        receiver.feedback_count >= 2,
+        f"{receiver.feedback_count} sent",
+    )
+    report.check(
+        "the session was never restarted",
+        "restarting:" not in log and "failed in" not in log,
+    )
+    report.check(
+        "audio kept flowing for the whole run",
+        abs(len(receiver.audio) - expected) <= expected * 0.15,
+        f"{len(receiver.audio)} vs ~{expected}",
+    )
+    report.check("clean TEARDOWN", "TEARDOWN" in [m for m, _ in receiver.requests])
+
+
 def scenario_capture(report):
     print(
-        "\n== Scenario 4: real tapped audio from an app, through the feed, to the speaker"
+        "\n== Scenario 5: real tapped audio from an app, through the feed, to the speaker"
     )
     receiver = FakeReceiver(new_listener())
     threading.Thread(target=receiver.serve, daemon=True).start()
@@ -718,7 +756,7 @@ def scenario_capture(report):
 
 
 def scenario_app_restart(report):
-    print("\n== Scenario 5: the app quits and comes back; the tap must be rebuilt")
+    print("\n== Scenario 6: the app quits and comes back; the tap must be rebuilt")
     receiver = FakeReceiver(new_listener())
     threading.Thread(target=receiver.serve, daemon=True).start()
     tone = start_tone()
@@ -774,6 +812,7 @@ def main() -> int:
     scenario_basic(report)
     scenario_reconnect(report)
     scenario_silent_speaker(report)
+    scenario_feedback_unsupported(report)
     if os.environ.get("AIRTAP_E2E_CAPTURE", "1") != "0":
         scenario_capture(report)
         scenario_app_restart(report)

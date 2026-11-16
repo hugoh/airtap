@@ -1,6 +1,7 @@
 import Foundation
 
 /// What the supervisor needs from a streaming session; `AirPlaySender` in production, a fake in tests.
+/// `stop` must be safe to call from another thread while `connect` is still blocked.
 protocol StreamingSession: AnyObject {
     func connect() throws
     func startStreaming(source: PCMSource, onFailure: @escaping (Error) -> Void) throws
@@ -17,40 +18,61 @@ public final class ReconnectingStream {
         case reconnecting(String)
     }
 
-    public var onState: ((State) -> Void)?
+    /// Finds the speaker. It may take seconds, so it is handed a check for "stop was requested, give up".
+    public typealias Resolve = (_ isCancelled: () -> Bool) throws -> Speaker
 
     private let source: PCMSource
     private let retryDelay: TimeInterval
-    private let resolve: () throws -> Speaker
+    private let resolve: Resolve
     private let makeSession: (Speaker) -> StreamingSession
 
     private let condition = NSCondition()
     private var stopped = false
     private var finished = false
     private var restartReason: String?
+    private var current: StreamingSession?
+    private var stateHandler: ((State) -> Void)?
 
-    public convenience init(source: PCMSource, volume: Double, resolve: @escaping () throws -> Speaker) {
+    public var onState: ((State) -> Void)? {
+        get { locked { stateHandler } }
+        set { locked { stateHandler = newValue } }
+    }
+
+    public convenience init(source: PCMSource, volume: Double, resolve: @escaping Resolve) {
         self.init(source: source, volume: volume, retryDelay: 1, resolve: resolve) {
             AirPlaySender(host: $0.host, port: $0.port, volumePercent: volume)
         }
     }
 
-    init(source: PCMSource, volume: Double, retryDelay: TimeInterval, resolve: @escaping () throws -> Speaker, makeSession: @escaping (Speaker) -> StreamingSession) {
+    init(source: PCMSource, volume: Double, retryDelay: TimeInterval, resolve: @escaping Resolve, makeSession: @escaping (Speaker) -> StreamingSession) {
         self.source = source
         self.retryDelay = retryDelay
         self.resolve = resolve
         self.makeSession = makeSession
     }
 
+    private func locked<T>(_ body: () -> T) -> T {
+        condition.lock()
+        defer { condition.unlock() }
+        return body()
+    }
+
     public func start() {
         Thread.detachNewThread { [self] in supervise() }
     }
 
+    /// Returns once the supervisor has let go of the speaker. A connect in progress is interrupted rather than awaited.
     public func stop() {
         condition.lock()
         stopped = true
+        let session = current
         condition.broadcast()
-        let deadline = Date().addingTimeInterval(5)
+        condition.unlock()
+
+        session?.stop()
+
+        condition.lock()
+        let deadline = Date().addingTimeInterval(8)
         while !finished, condition.wait(until: deadline) {}
         condition.unlock()
     }
@@ -68,24 +90,26 @@ public final class ReconnectingStream {
         var backoff = retryDelay
         while !isStopped {
             publish(.connecting)
-            clearRestartRequest()
+            locked { restartReason = nil }
             var session: StreamingSession?
             do {
-                let speaker = try resolve()
+                let speaker = try resolve { [self] in isStopped }
                 let candidate = makeSession(speaker)
                 session = candidate
+                guard adopt(candidate) else { break }
                 try candidate.connect()
                 try candidate.startStreaming(source: source) { [self] error in restart(reason: "stream failed: \(error)") }
                 publish(.streaming(speaker.name))
                 backoff = retryDelay
                 let reason = waitForRestartRequest()
-                candidate.stop()
+                release(candidate)
                 guard let reason else { break }
                 Log.info("session", "restarting: \(reason)")
                 publish(.reconnecting(reason))
                 pause(retryDelay)
             } catch {
-                session?.stop()
+                if let session { release(session) }
+                if isStopped { break }
                 Log.info("session", "could not stream: \(error)")
                 publish(.reconnecting("\(error)"))
                 pause(backoff)
@@ -98,16 +122,20 @@ public final class ReconnectingStream {
         condition.unlock()
     }
 
-    private var isStopped: Bool {
-        condition.lock()
-        defer { condition.unlock() }
-        return stopped
+    private var isStopped: Bool { locked { stopped } }
+
+    /// Makes the session reachable by `stop`. Returns false if stop already happened, so it must not connect at all.
+    private func adopt(_ session: StreamingSession) -> Bool {
+        locked {
+            guard !stopped else { return false }
+            current = session
+            return true
+        }
     }
 
-    private func clearRestartRequest() {
-        condition.lock()
-        restartReason = nil
-        condition.unlock()
+    private func release(_ session: StreamingSession) {
+        locked { current = nil }
+        session.stop()
     }
 
     /// Returns the reason to restart, or nil when the stream was stopped.

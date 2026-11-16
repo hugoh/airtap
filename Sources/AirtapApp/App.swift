@@ -83,7 +83,7 @@ final class Model: ObservableObject {
 }
 
 struct MenuView: View {
-    @StateObject private var model = Model()
+    @ObservedObject var model: Model
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -123,8 +123,11 @@ struct MenuView: View {
 
 @main
 struct AirtapApp: App {
+    /// Owned here, not by the popover's view, so a running stream stays reachable however the popover is rebuilt.
+    @StateObject private var model = Model()
+
     var body: some Scene {
-        MenuBarExtra("airtap", systemImage: "airplayaudio") { MenuView() }
+        MenuBarExtra("airtap", systemImage: "airplayaudio") { MenuView(model: model) }
             .menuBarExtraStyle(.window)
     }
 }

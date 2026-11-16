@@ -53,7 +53,9 @@ public final class StreamSession {
         self.router = router
         Log.info("capture", "tapping '\(app)' at \(Int(format.mSampleRate)) Hz")
 
-        let stream = ReconnectingStream(source: feed, volume: volume) { [speakerName] in try Self.resolve(speakerName) }
+        let stream = ReconnectingStream(source: feed, volume: volume) { [speakerName] isCancelled in
+            try Self.resolve(speakerName, isCancelled: isCancelled)
+        }
         stream.onState = onState
         self.stream = stream
         observePower()
@@ -72,10 +74,14 @@ public final class StreamSession {
         Log.info("session", "stopped")
     }
 
-    private static func resolve(_ name: String) throws -> Speaker {
+    private static func resolve(_ name: String, isCancelled: () -> Bool) throws -> Speaker {
         if let direct = Speaker(address: name) { return direct }
-        let result = SpeakerDiscovery.discoverDetailed(timeout: 10, matching: name)
-        if let speaker = result.speakers.first(where: { $0.name.localizedCaseInsensitiveContains(name) }) { return speaker }
+        let result = SpeakerDiscovery.discoverDetailed(timeout: 10, matching: name, isCancelled: isCancelled)
+        if let speaker = Speaker.bestMatch(for: name, in: result.speakers) {
+            let candidates = result.speakers.filter { $0.name.localizedCaseInsensitiveContains(name) }
+            if candidates.count > 1 { Log.info("session", "'\(name)' matches \(candidates.map(\.name)); using '\(speaker.name)'") }
+            return speaker
+        }
         if let offline = result.unreachable.first(where: { $0.localizedCaseInsensitiveContains(name) }) {
             throw AirPlayError(description: "'\(offline)' is announced on the network but not answering (powered off or asleep?)")
         }

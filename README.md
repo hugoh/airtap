@@ -42,9 +42,9 @@ Lifecycle events always print. `--debug` (or `AIRTAP_DEBUG=1`) adds everything b
 | --- | --- |
 | `[session]` | connect, pairing, ports, restart reasons, `could not stream: …` |
 | `[rtsp]` | every request with status and latency; `… failed after N ms` shows where a hang happened |
-| `[stats]` | once a second: `sent`, `maxLate`, `retransmit`, `timing`, `feedback ok/fail`, `feed buffered/underruns/overflows/drift` |
+| `[stats]` | once a second: `sent`, `dropped`, `maxLate`, `retransmit`, `timing`, `feedback ok/fail`, `feed buffered/underruns/overflows/drift` |
 | `[events]` | the speaker's event channel; it closing ends the session immediately |
-| `[feedback]` | keep-alive failures; timeouts get three strikes, a closed connection fails at once |
+| `[feedback]` | keep-alive failures; timeouts get three strikes, a closed connection fails at once, any reply counts as alive |
 | `[power]` | `system will sleep` / `system woke; reconnecting` |
 | `[capture]` | tap level once a second (a flat `0.000` means the tap hears nothing), and every tap rebuild |
 | `[stream]` | `failed in audio|control|feedback|events loop: …` names the thread that noticed |
@@ -60,7 +60,8 @@ Reading a failure:
 - **`feed … underruns` climbing**: the capture is not keeping up; each one costs a 150 ms gap while the cushion rebuilds.
   **`maxLate`** over a few hundred ms means the Mac is too busy to pace packets.
 - **`feed … drift` climbing slowly** is normal: one frame is skipped or repeated at a time to track the audio clock.
-  **`overflows`** only grow while no speaker is connected.
+  **`overflows`** mean audio arrived faster than it was sent and the oldest was dropped; **`dropped`** counts packets
+  the network stack refused for a moment.
 
 ## Tests
 
@@ -72,9 +73,9 @@ hk check --all             # linters, including SwiftLint
 ./scripts/gen_vectors.py > Tests/AirtapCoreTests/Vectors.swift   # regenerate vectors
 ```
 
-`e2e.py` runs five scenarios against a fake speaker built on pyatv's own crypto: a clean session with a retransmit
-request, a dropped connection, a speaker that goes silent, real audio tapped from a helper app (`TestTone`), and that
-app quitting and returning. The last two play a very quiet tone on the Mac for a moment and need an audio device, so
+`e2e.py` runs six scenarios against a fake speaker built on pyatv's own crypto: a clean session with a retransmit
+request, a dropped connection, a speaker that goes silent, a speaker that rejects keep-alives, real audio tapped from a
+helper app (`TestTone`), and that app quitting and returning. The last two play a very quiet tone on the Mac for a moment and need an audio device, so
 CI sets `AIRTAP_E2E_CAPTURE=0` to skip them.
 
 The fake speaker is strict about what real HomePods require, such as answering NTP timing before the stream SETUP completes.

@@ -2,15 +2,34 @@ import Foundation
 
 struct NetworkError: Error, CustomStringConvertible {
     let description: String
+    let code: Int32?
+
+    init(description: String, code: Int32? = nil) {
+        self.description = description
+        self.code = code
+    }
 
     static func posix(_ what: String) -> NetworkError {
-        NetworkError(description: "\(what): \(String(cString: strerror(errno)))")
+        let code = errno
+        return NetworkError(description: "\(what): \(String(cString: strerror(code)))", code: code)
+    }
+
+    /// The kernel could not take the packet right now (full buffers, a signal); the next one will likely go through.
+    var isTransient: Bool {
+        guard let code else { return false }
+        return [ENOBUFS, EAGAIN, EINTR].contains(code)
     }
 }
 
+/// Waits the full timeout even when signals interrupt `poll`, so an interruption is never mistaken for a timeout.
 private func waitReadable(_ descriptor: Int32, timeout: TimeInterval) -> Bool {
-    var pollDescriptor = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
-    return poll(&pollDescriptor, 1, Int32(timeout * 1000)) > 0
+    let deadline = Clock.now() + timeout
+    while true {
+        var pollDescriptor = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
+        let result = poll(&pollDescriptor, 1, Int32(max(0, deadline - Clock.now()) * 1000))
+        if result < 0, errno == EINTR { continue }
+        return result > 0
+    }
 }
 
 private func ipv4Address(host: String, port: UInt16) throws -> sockaddr_in {
@@ -164,9 +183,9 @@ final class UDPSocket {
         guard written == data.count else { throw NetworkError.posix("udp send") }
     }
 
-    func send(_ data: Data, to host: String, port: UInt16) throws {
-        var address = try ipv4Address(host: host, port: port)
-        try send(data, to: &address)
+    /// Resolves once so a periodic sender does not repeat the lookup for every packet.
+    static func address(host: String, port: UInt16) throws -> sockaddr_in {
+        try ipv4Address(host: host, port: port)
     }
 
     func send(_ data: Data, to address: inout sockaddr_in) throws {

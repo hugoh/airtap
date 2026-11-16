@@ -142,4 +142,14 @@ final class PCMFeedTests: XCTestCase {
         XCTAssertEqual(feed.overflowCount, 0)
         XCTAssertGreaterThan(feed.driftCorrections, 0)
     }
+
+    func testBacklogWhileNothingIsReadIsNotReportedAsOverflow() {
+        let feed = PCMFeed(inputRate: 44100, prebufferSeconds: 0.05, maxBufferedSeconds: 0.1)
+        for _ in 0..<10 { push([Float](repeating: 0.1, count: 2 * 4410), into: feed) }
+        XCTAssertEqual(feed.overflowCount, 0, "before playback starts, dropping old audio is expected")
+
+        _ = feed.readPacket(frames: 352)
+        for _ in 0..<10 { push([Float](repeating: 0.1, count: 2 * 4410), into: feed) }
+        XCTAssertGreaterThan(feed.overflowCount, 0, "during playback it means the reader fell behind")
+    }
 }

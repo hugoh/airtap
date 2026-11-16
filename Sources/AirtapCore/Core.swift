@@ -86,8 +86,16 @@ public func defaultOutput() throws -> OutputDevice {
 public final class Router {
     /// Called when a rebuild changed the sample rate of the audio handed to `sink`.
     public var onFormatChange: ((AudioStreamBasicDescription) -> Void)?
-    public private(set) var format = AudioStreamBasicDescription()
+    public var format: AudioStreamBasicDescription {
+        formatLock.lock()
+        defer { formatLock.unlock() }
+        return currentFormat
+    }
 
+    private static let maxRebuildRetries = 5
+    private let formatLock = NSLock()
+    private var currentFormat = AudioStreamBasicDescription()
+    private var rebuildRetries = 0
     private let bundleID: String
     private let sink: (UnsafePointer<AudioBufferList>) -> Void
     private let queue = DispatchQueue(label: "airtap.router")
@@ -106,15 +114,24 @@ public final class Router {
         observe(kAudioHardwarePropertyDefaultOutputDevice)
     }
 
-    deinit { stop() }
+    // No `queue.sync` here: the last reference can go away on `queue` itself, at the end of a listener callback,
+    // and syncing onto the queue we are already on would deadlock. Nothing else can touch the tap by now.
+    deinit {
+        removeListeners()
+        teardown()
+    }
 
     public func stop() {
+        removeListeners()
+        queue.sync { teardown() }
+    }
+
+    private func removeListeners() {
         for listener in listeners {
             var address = listener.address
             AudioObjectRemovePropertyListenerBlock(system, &address, queue, listener.block)
         }
         listeners = []
-        queue.sync { teardown() }
     }
 
     private func observe(_ selector: AudioObjectPropertySelector) {
@@ -138,18 +155,33 @@ public final class Router {
         guard isWaiting || Set(processes) != tappedProcesses || clock?.uid != clockUID else { return }
         let previousRate = format.mSampleRate
         teardown()
-        guard !processes.isEmpty, let clock else {
+        guard !processes.isEmpty else {
             Log.info("capture", "'\(bundleID)' has no audio process right now; waiting for it to return")
             return
         }
         do {
+            guard let clock else { throw AirtapError(description: "no default output device") }
             try build(processes: processes, clock: clock)
+            rebuildRetries = 0
             Log.info("capture", "tap rebuilt: \(processes.count) process(es), clock '\(clock.name)', \(Int(format.mSampleRate)) Hz")
             if format.mSampleRate != previousRate { onFormatChange?(format) }
         } catch {
-            Log.info("capture", "could not rebuild the tap: \(error)")
             teardown()
+            retryRebuild(after: error)
         }
+    }
+
+    /// A rebuild can fail because the new device is not ready at the instant the change is announced, and no further
+    /// change event would follow to trigger another attempt.
+    private func retryRebuild(after error: Error) {
+        guard rebuildRetries < Self.maxRebuildRetries else {
+            Log.info("capture", "could not rebuild the tap, giving up until the next change: \(error)")
+            return
+        }
+        rebuildRetries += 1
+        let delay = Double(rebuildRetries)
+        Log.info("capture", "could not rebuild the tap (\(error)); retry \(rebuildRetries)/\(Self.maxRebuildRetries) in \(Int(delay)) s")
+        queue.asyncAfter(deadline: .now() + delay) { [weak self] in self?.refresh() }
     }
 
     private func build(processes: [AudioObjectID], clock: OutputDevice) throws {
@@ -161,7 +193,11 @@ public final class Router {
         try Self.check(AudioHardwareCreateProcessTap(tapDescription, &tap), "create process tap (audio capture permission?)")
         var formatAddress = address(kAudioTapPropertyFormat)
         var formatSize = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
-        try Self.check(AudioObjectGetPropertyData(tap, &formatAddress, 0, nil, &formatSize, &format), "read tap format")
+        var tapFormat = AudioStreamBasicDescription()
+        try Self.check(AudioObjectGetPropertyData(tap, &formatAddress, 0, nil, &formatSize, &tapFormat), "read tap format")
+        formatLock.lock()
+        currentFormat = tapFormat
+        formatLock.unlock()
 
         let tapEntry: [String: Any] = [
             kAudioSubTapUIDKey: tapDescription.uuid.uuidString,

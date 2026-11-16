@@ -18,7 +18,8 @@ final class AirPlayLink {
 
     func request(
         method: String, uri: String, protocolName: String = "HTTP/1.1", contentType: String? = nil,
-        headers: [(String, String)] = [], body: Data? = nil, timeout: TimeInterval = 10
+        headers: [(String, String)] = [], body: Data? = nil, timeout: TimeInterval = 10,
+        accepting isReply: (HTTPResponse) -> Bool = { _ in true }
     ) throws -> HTTPResponse {
         lock.lock()
         defer { lock.unlock() }
@@ -31,6 +32,11 @@ final class AirPlayLink {
             while true {
                 if let (response, consumed) = try HTTPMessage.parseResponse(inbox) {
                     inbox = Data(inbox.dropFirst(consumed))
+                    guard isReply(response) else {
+                        // The answer to a request that already timed out; taking it would pair every later reply with the wrong request.
+                        Log.debug("rtsp") { "ignoring a late reply (CSeq \(response.headers["cseq"] ?? "?")) while waiting on \(method) \(uri)" }
+                        continue
+                    }
                     Log.debug("rtsp") { "< \(response.code) \(method) \(uri) (\(response.body.count) bytes, \(elapsed()) ms)" }
                     return response
                 }
@@ -82,7 +88,8 @@ final class RTSPSession {
             contentType: type,
             headers: [("CSeq", String(number)), ("DACP-ID", dacpID), ("Active-Remote", String(activeRemote)), ("Client-Instance", dacpID)] + headers,
             body: payload,
-            timeout: timeout
+            timeout: timeout,
+            accepting: { $0.headers["cseq"].map { $0 == String(number) } ?? true }
         )
         guard allowError || (200..<300).contains(response.code) else {
             throw AirPlayError(description: "\(method) failed with status \(response.code)")

@@ -55,4 +55,49 @@ final class AirPlayLinkTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(started), 2)
         XCTAssertThrowsError(try connection.receive(timeout: 1), "a closed connection stays closed")
     }
+
+    private func rtspSession(replying replies: [String]) throws -> (session: RTSPSession, cleanup: () -> Void) {
+        let server = try silentServer()
+        let link = AirPlayLink(connection: try TCPConnection(host: "127.0.0.1", port: server.port))
+        let peer = accept(server.descriptor, nil, nil)
+        for reply in replies {
+            let bytes = Array(reply.utf8)
+            _ = bytes.withUnsafeBytes { send(peer, $0.baseAddress, bytes.count, 0) }
+        }
+        return (RTSPSession(link: link), { close(peer); close(server.descriptor) })
+    }
+
+    func testAReplyToAnEarlierRequestIsSkipped() throws {
+        let (session, cleanup) = try rtspSession(replying: [
+            "RTSP/1.0 200 OK\r\nCSeq: 7\r\nContent-Length: 5\r\n\r\nstale",
+            "RTSP/1.0 200 OK\r\nCSeq: 0\r\nContent-Length: 5\r\n\r\nfresh",
+        ])
+        defer { cleanup() }
+        XCTAssertEqual(try session.exchange("POST", uri: "/feedback", timeout: 2).body, Data("fresh".utf8))
+    }
+
+    func testAReplyWithoutCSeqIsAccepted() throws {
+        let (session, cleanup) = try rtspSession(replying: ["RTSP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nok"])
+        defer { cleanup() }
+        XCTAssertEqual(try session.exchange("GET", uri: "/info", timeout: 2).body, Data("ok".utf8))
+    }
+
+    func testAnErrorStatusIsReturnedOnlyWhenAllowed() throws {
+        let reply = "RTSP/1.0 501 Not Implemented\r\nCSeq: 0\r\n\r\n"
+        let (allowed, cleanupAllowed) = try rtspSession(replying: [reply])
+        defer { cleanupAllowed() }
+        XCTAssertEqual(try allowed.exchange("POST", uri: "/feedback", allowError: true, timeout: 2).code, 501)
+
+        let (strict, cleanupStrict) = try rtspSession(replying: [reply])
+        defer { cleanupStrict() }
+        XCTAssertThrowsError(try strict.exchange("RECORD", timeout: 2))
+    }
+
+    func testOnlyTransientSendErrorsAreMarkedTransient() {
+        errno = ENOBUFS
+        XCTAssertTrue(NetworkError.posix("udp send").isTransient)
+        errno = ECONNREFUSED
+        XCTAssertFalse(NetworkError.posix("udp send").isTransient)
+        XCTAssertFalse(NetworkError(description: "timed out waiting for data").isTransient)
+    }
 }

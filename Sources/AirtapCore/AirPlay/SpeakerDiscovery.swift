@@ -12,6 +12,12 @@ public struct Speaker: Equatable, Hashable {
         self.port = port
     }
 
+    /// The speaker a user most likely means by `query`: an exact name if there is one, otherwise the first name containing it.
+    public static func bestMatch(for query: String, in speakers: [Speaker]) -> Speaker? {
+        speakers.first { $0.name.caseInsensitiveCompare(query) == .orderedSame }
+            ?? speakers.first { $0.name.localizedCaseInsensitiveContains(query) }
+    }
+
     /// Parses "192.168.1.20:7000", for speakers Bonjour cannot resolve. Names never look like this.
     public init?(address: String) {
         let parts = address.split(separator: ":")
@@ -32,10 +38,11 @@ public enum SpeakerDiscovery {
         discoverDetailed(timeout: timeout, matching: query).speakers
     }
 
-    /// Browses for AirPlay receivers, blocking the calling thread. Returns early once a speaker matching `query` resolves.
-    public static func discoverDetailed(timeout: TimeInterval = 4, matching query: String? = nil) -> Result {
+    /// Browses for AirPlay receivers, blocking the calling thread. Returns early once a speaker named exactly `query`
+    /// resolves, a moment after the first partial match, or when `isCancelled` turns true.
+    public static func discoverDetailed(timeout: TimeInterval = 4, matching query: String? = nil, isCancelled: () -> Bool = { false }) -> Result {
         let finder = Finder(query: query)
-        finder.run(timeout: timeout)
+        finder.run(timeout: timeout, isCancelled: isCancelled)
         let found = Set(finder.speakers.map(\.name))
         return Result(
             speakers: finder.speakers.sorted { $0.name < $1.name },
@@ -94,12 +101,19 @@ private final class Finder {
 
     var speakers: [Speaker] { byName.values.map(\.speaker) }
 
-    private var isSatisfied: Bool {
+    private var firstPartialMatch: Date?
+
+    /// An exact name ends the search at once. A partial match waits a second for a better-named speaker to show up.
+    private func isSatisfied() -> Bool {
         guard let query else { return false }
-        return speakers.contains { $0.name.localizedCaseInsensitiveContains(query) }
+        if speakers.contains(where: { $0.name.caseInsensitiveCompare(query) == .orderedSame }) { return true }
+        guard speakers.contains(where: { $0.name.localizedCaseInsensitiveContains(query) }) else { return false }
+        let since = firstPartialMatch ?? Date()
+        firstPartialMatch = since
+        return Date().timeIntervalSince(since) > 1
     }
 
-    func run(timeout: TimeInterval) {
+    func run(timeout: TimeInterval, isCancelled: () -> Bool) {
         guard DNSServiceCreateConnection(&connection) == kDNSServiceErr_NoError, let connection else {
             Log.info("discovery", "could not reach the system DNS-SD service")
             return
@@ -113,7 +127,7 @@ private final class Finder {
 
         let deadline = Date().addingTimeInterval(timeout)
         var descriptor = pollfd(fd: DNSServiceRefSockFD(connection), events: Int16(POLLIN), revents: 0)
-        while !isSatisfied {
+        while !isSatisfied(), !isCancelled() {
             let remaining = deadline.timeIntervalSinceNow
             guard remaining > 0 else { break }
             guard poll(&descriptor, 1, Int32(min(remaining, 0.25) * 1000)) > 0 else { continue }

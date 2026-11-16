@@ -128,3 +128,24 @@ final class SpeakerAddressTests: XCTestCase {
         }
     }
 }
+
+final class SpeakerMatchTests: XCTestCase {
+    private let speakers = [
+        Speaker(name: "Kitchen Display", host: "10.0.0.1", port: 7000),
+        Speaker(name: "Kitchen", host: "10.0.0.2", port: 7000),
+        Speaker(name: "Bedroom", host: "10.0.0.3", port: 7000),
+    ]
+
+    func testAnExactNameBeatsALongerNameThatContainsIt() {
+        XCTAssertEqual(Speaker.bestMatch(for: "kitchen", in: speakers)?.host, "10.0.0.2")
+    }
+
+    func testFallsBackToASubstringMatch() {
+        XCTAssertEqual(Speaker.bestMatch(for: "bed", in: speakers)?.name, "Bedroom")
+        XCTAssertEqual(Speaker.bestMatch(for: "display", in: speakers)?.name, "Kitchen Display")
+    }
+
+    func testNoMatchIsNil() {
+        XCTAssertNil(Speaker.bestMatch(for: "garage", in: speakers))
+    }
+}

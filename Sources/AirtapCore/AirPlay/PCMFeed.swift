@@ -17,6 +17,9 @@ public final class PCMFeed: PCMSource {
     private let converterLock = NSLock()
     private var inputFormat: AVAudioFormat
     private var converter: AVAudioConverter
+    /// Reused across packets; the converter only needs the input to stay valid until it asks for more.
+    private var inputBuffer: AVAudioPCMBuffer?
+    private var outputBuffer: AVAudioPCMBuffer?
 
     /// Guards the ring. Unfair locks are safe to take on the audio thread: no allocation, and they donate priority.
     private let ringLock: UnsafeMutablePointer<os_unfair_lock>
@@ -86,7 +89,8 @@ public final class PCMFeed: PCMSource {
         if excess > 0 {
             readFrame = (readFrame + excess) % ringFrames
             count -= excess
-            overflows += 1
+            // Before playback starts nobody reads, so dropping old audio is expected rather than a problem.
+            if primed { overflows += 1 }
         }
         var written = 0
         while written < incoming {
@@ -120,7 +124,13 @@ public final class PCMFeed: PCMSource {
         os_unfair_lock_unlock(ringLock)
         guard ready else { return packet }
 
-        let output = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: AVAudioFrameCount(frames))!
+        let output: AVAudioPCMBuffer
+        if let reusable = outputBuffer, reusable.frameCapacity == AVAudioFrameCount(frames) {
+            output = reusable
+        } else {
+            output = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: AVAudioFrameCount(frames))!
+            outputBuffer = output
+        }
         var error: NSError?
         converter.convert(to: output, error: &error) { [self] requested, status in
             // The converter discards whatever it did not ask for, so hand over exactly what it requested.
@@ -153,7 +163,11 @@ public final class PCMFeed: PCMSource {
         os_unfair_lock_lock(ringLock)
         defer { os_unfair_lock_unlock(ringLock) }
         let length = min(requested, count)
-        guard length > 0, let buffer = AVAudioPCMBuffer(pcmFormat: inputFormat, frameCapacity: AVAudioFrameCount(length)) else { return nil }
+        guard length > 0 else { return nil }
+        if inputBuffer.map({ Int($0.frameCapacity) < length }) ?? true {
+            inputBuffer = AVAudioPCMBuffer(pcmFormat: inputFormat, frameCapacity: AVAudioFrameCount(max(length, 1024)))
+        }
+        guard let buffer = inputBuffer else { return nil }
         buffer.frameLength = AVAudioFrameCount(length)
         let destination = buffer.floatChannelData![0]
         let firstRun = min(length, ringFrames - readFrame)
@@ -186,6 +200,7 @@ public final class PCMFeed: PCMSource {
         defer { converterLock.unlock() }
         inputFormat = Self.format(rate: inputRate)
         converter = AVAudioConverter(from: inputFormat, to: outputFormat)!
+        inputBuffer = nil
         os_unfair_lock_lock(ringLock)
         readFrame = 0
         count = 0
@@ -210,7 +225,9 @@ public final class PCMFeed: PCMSource {
     var driftCorrections: Int { locked { corrections } }
 
     public var debugSummary: String {
+        converterLock.lock()
         let rate = inputFormat.sampleRate
+        converterLock.unlock()
         return locked {
             "feed buffered=\(Int(Double(count) / rate * 1000))ms underruns=\(underruns)/\(packetsRead) overflows=\(overflows) drift=\(corrections)"
         }
