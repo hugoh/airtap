@@ -109,3 +109,7 @@ The fake speaker is strict about what real HomePods require, such as answering N
 - About 2 s latency, normal for AirPlay. Not suitable for video sync.
 - Reconnection restarts the stream; the audio during the gap is lost.
 - Volume is set when a session starts; changing it means restarting the stream.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
