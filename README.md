@@ -26,6 +26,8 @@ swift build -c release
 
 App names and speaker names are case-insensitive substrings.
 
+Install with Homebrew: `brew install hugoh/tap/airtap` (CLI) or `brew install --cask hugoh/tap/airtap` (menu bar app).
+
 Menu bar app: `scripts/make-app.sh` (or `mise run app`) builds `build/Airtap.app`. On first run macOS asks for
 System Audio Recording and Local Network access. Its log is `~/Library/Logs/airtap.log` (appended across runs, rotated
 at 2 MB); the menu has a debug toggle.
