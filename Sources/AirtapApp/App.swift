@@ -68,7 +68,9 @@ final class Model: ObservableObject {
             guard application.activationPolicy != .prohibited, let id = application.bundleIdentifier else { return nil }
             return (RunningApp(bundleID: id, name: application.localizedName ?? id, isRegular: application.activationPolicy == .regular), application.icon)
         }
-        apps = AppCatalog.listed(audio: audioApps(), running: running.map(\.0), excluding: Bundle.main.bundleIdentifier)
+        apps = AppCatalog.listed(
+            audio: audioApps(), running: running.map(\.0), excluding: Bundle.main.bundleIdentifier, keeping: isStreaming ? app : nil
+        )
         icons = [:]
         for (app, icon) in running {
             guard let image = icon?.copy() as? NSImage else { continue }

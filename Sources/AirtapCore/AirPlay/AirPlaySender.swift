@@ -138,18 +138,20 @@ public final class AirPlaySender {
         )
         // Events are ignored, but unread data would eventually stall the speaker's side of the channel.
         spawn("events", priority: .utility) { [weak self, connection] in
+            var decoding = true
             while true {
                 do {
                     let chunk = try connection.receive(timeout: 1)
                     Log.debug("events") { "received \(chunk.count) bytes" }
-                    _ = try? session.decrypt(chunk)
+                    if decoding, (try? session.decrypt(chunk)) == nil {
+                        // Still read the channel so the speaker is not left waiting, but there is nothing to decode any more.
+                        decoding = false
+                        Log.info("events", "event messages can no longer be decoded; ignoring the rest of them")
+                    }
                 } catch let error as NetworkError where error.description.hasPrefix("timed out") {
                     continue
                 } catch {
-                    guard let self, self.isRunning else {
-                        Log.debug("events") { "event channel closed with the session" }
-                        return
-                    }
+                    guard let self, self.isRunning else { return }  // closed along with the session
                     Log.info("events", "event channel closed: \(error)")
                     self.fail(AirPlayError(description: "event channel closed (\(error))"), from: "events")
                     return
@@ -194,7 +196,8 @@ public final class AirPlaySender {
         Log.info("stream", "streaming started (volume \(Int(volumePercent))%)")
     }
 
-    static func decibels(percent: Double) -> Double { percent <= 0 ? -144 : -30 + percent * 0.3 }
+    /// 0 is the speaker's mute (-144 dB) and 100 is full scale. Anything else, including NaN, stays inside that range.
+    static func decibels(percent: Double) -> Double { percent > 0 ? -30 + min(percent, 100) * 0.3 : -144 }
 
     private func locked<T>(_ body: () -> T) -> T {
         stateLock.lock()

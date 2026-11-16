@@ -1,10 +1,6 @@
 import CryptoKit
 import Foundation
 
-struct HAPError: Error, CustomStringConvertible {
-    let description: String
-}
-
 /// ChaCha20-Poly1305 with the 4 zero bytes + 8 byte little-endian counter nonce HAP uses.
 struct CounterNonce {
     private(set) var counter: UInt64 = 0
@@ -46,7 +42,20 @@ final class HAPSession {
         return output
     }
 
+    var bufferedByteCount: Int { pending.count }
+
+    /// After a frame fails to authenticate the stream is out of step for good, so what is buffered can never be
+    /// decoded; drop it instead of piling up everything that arrives afterwards.
     func decrypt(_ data: Data) throws -> Data {
+        do {
+            return try decode(data)
+        } catch {
+            pending = Data()
+            throw error
+        }
+    }
+
+    private func decode(_ data: Data) throws -> Data {
         pending += data
         var output = Data()
         while pending.count >= 2 {
@@ -63,7 +72,7 @@ final class HAPSession {
             do {
                 output += try ChaChaPoly.open(box, using: inKey, authenticating: aad)
             } catch {
-                throw HAPError(description: "frame failed authentication")
+                throw AirPlayError(description: "frame failed authentication")
             }
             pending = Data(pending[frameEnd...])
         }

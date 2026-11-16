@@ -69,6 +69,16 @@ final class HAPSessionTests: XCTestCase {
         XCTAssertEqual(output, plain + Data("second message".utf8))
     }
 
+    func testAFailedFrameDoesNotLeaveABacklogThatGrowsForever() throws {
+        let receiver = HAPSession(outKey: readKey, inKey: writeKey)
+        var frames = Data(hex: Vectors.hapFramesTwoMessages)
+        frames[10] ^= 1
+        XCTAssertThrowsError(try receiver.decrypt(frames))
+        XCTAssertEqual(receiver.bufferedByteCount, 0, "nothing after a broken frame can be decoded, so nothing is kept")
+        for _ in 0..<20 { _ = try? receiver.decrypt(Data(repeating: 7, count: 500)) }
+        XCTAssertLessThan(receiver.bufferedByteCount, 600, "later garbage must not pile up")
+    }
+
     func testTamperedFrameThrows() {
         let receiver = HAPSession(outKey: readKey, inKey: writeKey)
         var frames = Data(hex: Vectors.hapFramesTwoMessages)
@@ -114,6 +124,14 @@ final class VolumeTests: XCTestCase {
         XCTAssertEqual(AirPlaySender.decibels(percent: 100), 0, accuracy: 0.0001)
         XCTAssertEqual(AirPlaySender.decibels(percent: 50), -15, accuracy: 0.0001)
         XCTAssertEqual(AirPlaySender.decibels(percent: 15), -25.5, accuracy: 0.0001)
+    }
+
+    func testOutOfRangeVolumeNeverBecomesLouderThanFullScale() {
+        XCTAssertEqual(AirPlaySender.decibels(percent: 150), 0, accuracy: 0.0001)
+        XCTAssertEqual(AirPlaySender.decibels(percent: 300), 0, accuracy: 0.0001)
+        XCTAssertEqual(AirPlaySender.decibels(percent: -20), -144)
+        XCTAssertEqual(AirPlaySender.decibels(percent: .nan), -144, "garbage means mute, never a loud guess")
+        XCTAssertEqual(AirPlaySender.decibels(percent: .infinity), 0)
     }
 }
 

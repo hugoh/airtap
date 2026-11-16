@@ -52,6 +52,7 @@ class FakeReceiver:
         stall_after=None,
         request_retransmit=False,
         feedback_status=200,
+        bad_proof=False,
     ):
         self.listener = listener
         self.port = listener.getsockname()[1]
@@ -61,6 +62,7 @@ class FakeReceiver:
         self.stalled = False
         self.request_retransmit = request_retransmit
         self.feedback_status = feedback_status
+        self.bad_proof = bad_proof
         self.control_sock = None
         self.raw_packets = {}
         self.retransmit_request = None
@@ -154,7 +156,9 @@ class FakeReceiver:
                 reply = hap_tlv8.write_tlv(
                     {
                         TLV.SeqNo: b"\x04",
-                        TLV.Proof: binascii.unhexlify(server.key_proof_hash),
+                        TLV.Proof: bytes(64)
+                        if self.bad_proof
+                        else binascii.unhexlify(server.key_proof_hash),
                     }
                 )
                 state["paired"] = True
@@ -702,9 +706,90 @@ def scenario_feedback_unsupported(report):
     report.check("clean TEARDOWN", "TEARDOWN" in [m for m, _ in receiver.requests])
 
 
+def scenario_bad_proof(report):
+    print(
+        "\n== Scenario 5: a speaker that cannot prove the pairing secret must be refused"
+    )
+    receiver = FakeReceiver(new_listener(), bad_proof=True)
+    threading.Thread(target=receiver.serve, daemon=True).start()
+    process = subprocess.Popen(
+        [BINARY, "tone", "127.0.0.1", str(receiver.port), "--debug"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    time.sleep(8)
+    process.terminate()
+    log = process.communicate(timeout=15)[1]
+    methods = [m for m, _ in receiver.requests]
+    report.check(
+        "sender refused the speaker and said why",
+        "did not prove it knows the pairing secret" in log,
+    )
+    report.check(
+        "nothing was set up after the failed pairing",
+        not {"SETUP", "RECORD", "FLUSH"} & set(methods),
+        str(methods),
+    )
+    report.check("no audio was sent to it", not receiver.audio)
+
+
+def scenario_fail_open(report):
+    print(
+        "\n== Scenario 8: an outage longer than a reconnect gives the app's sound back to the Mac"
+    )
+    listener = new_listener()
+    first = FakeReceiver(listener, drop_after=3)
+    second = FakeReceiver(listener)
+
+    def serve_both():
+        first.serve()
+        time.sleep(
+            12
+        )  # the speaker stays away long enough for the grace period to run out
+        second.serve()
+
+    threading.Thread(target=serve_both, daemon=True).start()
+    tone = start_tone()
+    time.sleep(1.5)
+    sender = start_capture_sender(listener.getsockname()[1])
+    wait_for_packets(first, 300, timeout=40)
+    resumed = wait_for_packets(second, 300, timeout=60)
+    log = finish(sender)
+    tone.terminate()
+    time.sleep(0.5)
+    events = [
+        line.strip()
+        for line in log.splitlines()
+        if "muted on this Mac" in line or "plays on this Mac again" in line
+    ]
+    for line in events:
+        print("   ", line)
+    kinds = ["mute" if "is muted" in line else "unmute" for line in events]
+    report.check(
+        "muted while the speaker has the app, given back during the outage, muted again after",
+        kinds == ["mute", "unmute", "mute"],
+        str(kinds),
+    )
+    report.check("audio resumed once the speaker returned", resumed)
+    audio = sorted(second.audio, key=lambda p: p[1])[100:]
+    if audio:
+        frequency, peak = tone_frequency(b"".join(p[4] for p in audio))
+        report.check(
+            "the resumed audio is the app's tone after the tap was rebuilt",
+            abs(frequency - 440) < 15 and peak > 400,
+            f"{frequency:.1f} Hz, peak {peak}",
+        )
+    report.check(
+        "sender stopped cleanly on Ctrl-C",
+        sender.returncode == 0,
+        f"exit {sender.returncode}",
+    )
+
+
 def scenario_capture(report):
     print(
-        "\n== Scenario 5: real tapped audio from an app, through the feed, to the speaker"
+        "\n== Scenario 6: real tapped audio from an app, through the feed, to the speaker"
     )
     receiver = FakeReceiver(new_listener())
     threading.Thread(target=receiver.serve, daemon=True).start()
@@ -772,7 +857,7 @@ def scenario_capture(report):
 
 
 def scenario_app_restart(report):
-    print("\n== Scenario 6: the app quits and comes back; the tap must be rebuilt")
+    print("\n== Scenario 7: the app quits and comes back; the tap must be rebuilt")
     receiver = FakeReceiver(new_listener())
     threading.Thread(target=receiver.serve, daemon=True).start()
     tone = start_tone()
@@ -829,9 +914,11 @@ def main() -> int:
     scenario_reconnect(report)
     scenario_silent_speaker(report)
     scenario_feedback_unsupported(report)
+    scenario_bad_proof(report)
     if os.environ.get("AIRTAP_E2E_CAPTURE", "1") != "0":
         scenario_capture(report)
         scenario_app_restart(report)
+        scenario_fail_open(report)
     else:
         print("\n(capture scenarios skipped: AIRTAP_E2E_CAPTURE=0)")
     print(f"\n{sum(report.results)}/{len(report.results)} checks passed")

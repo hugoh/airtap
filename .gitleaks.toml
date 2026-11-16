@@ -1,0 +1,6 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "SwiftPM build output can hold a snapshot of the build environment; it is ignored by git and never committed."
+paths = ['''(^|/)\.build/''']

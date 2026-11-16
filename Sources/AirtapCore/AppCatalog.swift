@@ -30,8 +30,8 @@ public struct ListedApp: Identifiable, Equatable {
 public enum AppCatalog {
     /// Folds audio processes (`com.electron.pocket-casts.helper`, ...) into the running apps that own them and hides
     /// the ones nobody owns, such as system daemons. Background agents show up only while they are playing, and
-    /// `excluding` (the app itself) never does. Playing apps come first.
-    public static func listed(audio: [AudioApp], running: [RunningApp], excluding: String? = nil) -> [ListedApp] {
+    /// `excluding` (the app itself) never does, and `keeping` (the app being streamed) always does. Playing apps come first.
+    public static func listed(audio: [AudioApp], running: [RunningApp], excluding: String? = nil, keeping: String? = nil) -> [ListedApp] {
         var playing: [String: Bool] = [:]
         var owners: [String: RunningApp] = [:]
         for process in audio {
@@ -39,7 +39,12 @@ public enum AppCatalog {
             playing[owner.bundleID] = (playing[owner.bundleID] ?? false) || process.isPlaying
             owners[owner.bundleID] = owner
         }
-        let visible = playing.filter { owners[$0.key]?.isRegular == true || $0.value }
+        var visible = playing.filter { owners[$0.key]?.isRegular == true || $0.value }
+        // The app being streamed must not vanish from the list just because it paused and its audio process went away.
+        if let keeping, visible[keeping] == nil, let app = running.first(where: { $0.bundleID == keeping }) {
+            visible[keeping] = false
+            owners[keeping] = app
+        }
         return visible.map { ListedApp(bundleID: $0.key, name: owners[$0.key]?.name ?? $0.key, isPlaying: $0.value) }
             .sorted { ($0.isPlaying ? 0 : 1, $0.name.lowercased()) < ($1.isPlaying ? 0 : 1, $1.name.lowercased()) }
     }
