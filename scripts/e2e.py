@@ -748,6 +748,22 @@ def scenario_capture(report):
         bool(underruns) and int(underruns[-1][0]) == 0,
         f"{underruns[-1] if underruns else 'no stats'}",
     )
+    summaries = re.findall(r"\[health\] (.*)", log)
+    report.check(
+        "health summary reported while streaming",
+        bool(summaries),
+        summaries[-1] if summaries else "no [health] lines in the log",
+    )
+    report.check(
+        "a healthy stream is reported as healthy",
+        bool(summaries) and all(not line.startswith("Unstable") for line in summaries),
+        "; ".join(sorted({line for line in summaries if line.startswith("Unstable")})),
+    )
+    report.check(
+        "summary names the speaker and the delay",
+        bool(summaries) and "delay ≈" in summaries[-1],
+        summaries[-1] if summaries else "",
+    )
     report.check(
         "sender stopped cleanly on Ctrl-C",
         sender.returncode == 0,

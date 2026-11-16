@@ -25,6 +25,9 @@ final class Model: ObservableObject {
     private var isApplyingSelection = false
     @Published var volume = 30.0
     @Published var status = "Idle"
+    @Published var health: StreamHealth?
+    @Published var failed = false
+    @Published var showDetails = false
     @Published var isScanning = false
     @Published var isStopping = false
     @Published var debug = Log.isDebugEnabled {
@@ -87,6 +90,8 @@ final class Model: ObservableObject {
                 session.stop()
                 DispatchQueue.main.async {
                     self.isStopping = false
+                    self.health = nil
+                    self.failed = false
                     self.status = "Idle"
                 }
             }
@@ -96,11 +101,16 @@ final class Model: ObservableObject {
         session.onState = { state in
             DispatchQueue.main.async { self.show(state) }
         }
+        session.onHealth = { health in
+            DispatchQueue.main.async { if self.session != nil { self.health = health } }
+        }
+        failed = false
         do {
             try session.start()
             self.session = session
             status = "Connecting to \(speaker)…"
         } catch {
+            failed = true
             status = "\(error)"
         }
     }
@@ -110,8 +120,18 @@ final class Model: ObservableObject {
         switch state {
         case .connecting: status = "Connecting to \(speaker)…"
         case .streaming(let name): status = "Streaming to \(name)"
-        case .reconnecting(let reason): status = "Reconnecting: \(reason)"
+        case .reconnecting(let reason):
+            health = nil
+            status = "Reconnecting: \(reason)"
         }
+    }
+
+    /// What the dot beside the status line means.
+    var indicator: (color: Color, text: String) {
+        if failed { return (.red, status) }
+        guard isStreaming else { return (.secondary, status) }
+        guard let health else { return (.orange, status) }
+        return (health.assessment.level == .good ? .green : .yellow, health.summary)
     }
 }
 
@@ -146,7 +166,14 @@ struct MenuView: View {
                 Button(model.isScanning ? "Scanning…" : "Refresh") { model.refresh() }
                     .disabled(model.isScanning)
             }
-            Text(model.status).font(.caption).foregroundStyle(.secondary).lineLimit(3)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Circle().fill(model.indicator.color).frame(width: 8, height: 8)
+                Text(model.indicator.text).font(.caption).foregroundStyle(.secondary).lineLimit(3)
+            }
+            if let health = model.health {
+                DisclosureGroup("Details", isExpanded: $model.showDetails) { DetailsView(health: health) }
+                    .font(.caption)
+            }
             Divider()
             Toggle("Debug log", isOn: $model.debug).font(.caption)
             HStack {
@@ -158,6 +185,32 @@ struct MenuView: View {
         .padding(12)
         .frame(width: 330)
         .onAppear { model.refresh() }
+    }
+}
+
+struct DetailsView: View {
+    let health: StreamHealth
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(health.sections, id: \.title) { section in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(section.title).font(.caption.weight(.semibold))
+                    ForEach(section.rows, id: \.label) { row in
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(row.label).foregroundStyle(.secondary)
+                            Spacer(minLength: 8)
+                            Text(row.value).monospacedDigit().multilineTextAlignment(.trailing)
+                        }
+                    }
+                }
+            }
+            if !health.assessment.problems.isEmpty {
+                Text(health.assessment.problems.joined(separator: "\n")).foregroundStyle(.yellow)
+            }
+        }
+        .font(.caption)
+        .padding(.top, 4)
     }
 }
 

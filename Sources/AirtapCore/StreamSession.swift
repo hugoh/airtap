@@ -18,6 +18,9 @@ public final class StreamSession {
         didSet { stream?.onState = onState }
     }
 
+    /// Called once a second while streaming with how the stream is doing, and with nil while there is no connection.
+    public var onHealth: ((StreamHealth?) -> Void)?
+
     private let app: String
     private let speakerName: String
     private let volume: Double
@@ -59,7 +62,7 @@ public final class StreamSession {
         stream.onState = onState
         self.stream = stream
         observePower()
-        startMeter()
+        startMeter(stream: stream, feed: feed, sampleRate: Int(format.mSampleRate))
         stream.start()
     }
 
@@ -101,13 +104,18 @@ public final class StreamSession {
         })
     }
 
-    private func startMeter() {
-        let timer = DispatchSource.makeTimerSource(queue: .global())
+    private func startMeter(stream: ReconnectingStream, feed: PCMFeed, sampleRate: Int) {
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "airtap.health"))
         timer.schedule(deadline: .now() + 1, repeating: 1)
         let tap = tap
-        timer.setEventHandler {
-            Log.debug("capture") { String(format: "input level %.3f", tap.peak) }
+        var reporter = HealthReporter(speakerName: speakerName)
+        timer.setEventHandler { [weak self] in
+            let level = tap.peak
             tap.peak = 0
+            Log.debug("capture") { String(format: "input level %.3f", level) }
+            let health = reporter.report(connection: stream.connection, feed: feed.stats, inputLevel: level, sampleRate: sampleRate, now: Clock.now())
+            if let health, reporter.ticks % 5 == 0 { Log.debug("health") { health.summary } }
+            self?.onHealth?(health)
         }
         timer.resume()
         meter = timer

@@ -6,9 +6,16 @@ protocol StreamingSession: AnyObject {
     func connect() throws
     func startStreaming(source: PCMSource, onFailure: @escaping (Error) -> Void) throws
     func stop()
+    var senderStats: SenderStats? { get }
 }
 
-extension AirPlaySender: StreamingSession {}
+extension StreamingSession {
+    var senderStats: SenderStats? { nil }
+}
+
+extension AirPlaySender: StreamingSession {
+    var senderStats: SenderStats? { diagnostics }
+}
 
 /// Keeps one PCM source streaming to one speaker, reconnecting with backoff whenever the session fails.
 public final class ReconnectingStream {
@@ -16,6 +23,15 @@ public final class ReconnectingStream {
         case connecting
         case streaming(String)
         case reconnecting(String)
+    }
+
+    /// Where the stream stands, for display.
+    public struct Connection: Equatable {
+        public var speaker: Speaker?
+        public var connectedSince: Date?
+        public var reconnects = 0
+        public var lastReconnectReason: String?
+        public var sender: SenderStats?
     }
 
     /// Finds the speaker. It may take seconds, so it is handed a check for "stop was requested, give up".
@@ -32,6 +48,19 @@ public final class ReconnectingStream {
     private var restartReason: String?
     private var current: StreamingSession?
     private var stateHandler: ((State) -> Void)?
+    private var speaker: Speaker?
+    private var connectedSince: Date?
+    private var reconnects = 0
+    private var lastReconnectReason: String?
+
+    public var connection: Connection {
+        locked {
+            Connection(
+                speaker: speaker, connectedSince: connectedSince, reconnects: reconnects,
+                lastReconnectReason: lastReconnectReason, sender: connectedSince == nil ? nil : current?.senderStats
+            )
+        }
+    }
 
     public var onState: ((State) -> Void)? {
         get { locked { stateHandler } }
@@ -99,17 +128,24 @@ public final class ReconnectingStream {
                 guard adopt(candidate) else { break }
                 try candidate.connect()
                 try candidate.startStreaming(source: source) { [self] error in restart(reason: "stream failed: \(error)") }
+                locked {
+                    self.speaker = speaker
+                    connectedSince = Date()
+                }
                 publish(.streaming(speaker.name))
                 backoff = retryDelay
                 let reason = waitForRestartRequest()
+                locked { connectedSince = nil }
                 release(candidate)
                 guard let reason else { break }
+                noteReconnect(reason)
                 Log.info("session", "restarting: \(reason)")
                 publish(.reconnecting(reason))
                 pause(retryDelay)
             } catch {
                 if let session { release(session) }
                 if isStopped { break }
+                noteReconnect("\(error)")
                 Log.info("session", "could not stream: \(error)")
                 publish(.reconnecting("\(error)"))
                 pause(backoff)
@@ -123,6 +159,13 @@ public final class ReconnectingStream {
     }
 
     private var isStopped: Bool { locked { stopped } }
+
+    private func noteReconnect(_ reason: String) {
+        locked {
+            reconnects += 1
+            lastReconnectReason = reason.replacingOccurrences(of: "stream failed: ", with: "")
+        }
+    }
 
     /// Makes the session reachable by `stop`. Returns false if stop already happened, so it must not connect at all.
     private func adopt(_ session: StreamingSession) -> Bool {

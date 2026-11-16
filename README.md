@@ -34,6 +34,26 @@ The bundle is ad-hoc signed by default, so macOS asks for those permissions agai
 create a code-signing certificate (Keychain Access → Certificate Assistant → Create a Certificate → Code Signing) and
 build with `AIRTAP_SIGN_IDENTITY="<certificate name>" scripts/make-app.sh`.
 
+## What the menu shows
+
+Under the Start button, a dot and one line say how the stream is doing:
+
+| Dot | Meaning |
+| --- | --- |
+| green | `Streaming to Kitchen · delay ≈ 1.7 s` (or `· the app is silent`, which is not a fault) |
+| yellow | `Unstable: …` the two most important problems from the last minute |
+| orange | connecting, or reconnecting with the reason |
+| red | it could not start, with the reason |
+
+"Details" expands to three groups: **Connection** (speaker and address, how long pairing and setup took, uptime,
+reconnects and the last reason), **Stream** (keep-alive round trip, packets per second, resends, slowest send) and
+**Audio** (buffer against its 150 ms target, gaps, dropped packets, clock-drift fixes, input level and tap rate).
+
+The stream counts as unstable when, in the last minute, audio ran dry, packets were dropped or the speaker was slow to
+answer; when five or more packets had to be resent; or when the Mac sent a packet over 100 ms late in the last ten
+seconds. The delay is an estimate (the 1.5 s the speaker is asked to buffer, plus the feed and the speaker's own
+rendering), not a measurement. With `--debug` the same summary is logged as `[health]` every five seconds.
+
 ## Debugging a disconnect
 
 Lifecycle events always print. `--debug` (or `AIRTAP_DEBUG=1`) adds everything below.
@@ -46,6 +66,7 @@ Lifecycle events always print. `--debug` (or `AIRTAP_DEBUG=1`) adds everything b
 | `[events]` | the speaker's event channel; it closing ends the session immediately |
 | `[feedback]` | keep-alive failures; timeouts get three strikes, a closed connection fails at once, any reply counts as alive |
 | `[power]` | `system will sleep` / `system woke; reconnecting` |
+| `[health]` | the menu's one-line summary, every five seconds |
 | `[capture]` | tap level once a second (a flat `0.000` means the tap hears nothing), and every tap rebuild |
 | `[stream]` | `failed in audio|control|feedback|events loop: …` names the thread that noticed |
 

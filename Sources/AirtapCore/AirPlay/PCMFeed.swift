@@ -2,6 +2,14 @@ import AVFoundation
 import Foundation
 import os
 
+public struct FeedStats: Equatable {
+    public var bufferedMilliseconds: Int
+    public var targetMilliseconds: Int
+    public var underruns: Int
+    public var overflows: Int
+    public var driftCorrections: Int
+}
+
 /// Bridges the process tap (float32 stereo at the device rate) to the sender (16-bit big-endian stereo at 44.1 kHz).
 ///
 /// It keeps a small cushion so chunked delivery never starves the sender, and nudges the buffer level by one
@@ -223,6 +231,18 @@ public final class PCMFeed: PCMSource {
     var underrunCount: Int { locked { underruns } }
     var overflowCount: Int { locked { overflows } }
     var driftCorrections: Int { locked { corrections } }
+
+    public var stats: FeedStats {
+        converterLock.lock()
+        let rate = inputFormat.sampleRate
+        converterLock.unlock()
+        return locked {
+            FeedStats(
+                bufferedMilliseconds: Int(Double(count) / rate * 1000), targetMilliseconds: Int(Double(targetFrames) / rate * 1000),
+                underruns: underruns, overflows: overflows, driftCorrections: corrections
+            )
+        }
+    }
 
     public var debugSummary: String {
         converterLock.lock()

@@ -34,7 +34,7 @@ public final class AirPlaySender {
     private var headTimestamp: UInt64 = 0
     private var sequence: UInt16 = 0
     private var backlog: [UInt16: Data] = [:]
-    private var stats = StreamStats()
+    private let statsStore = StatsStore()
     private var source: PCMSource?
 
     public init(host: String, port: UInt16, volumePercent: Double = 30) {
@@ -72,8 +72,10 @@ public final class AirPlaySender {
         let rtsp = try keep(RTSPSession(link: AirPlayLink(connection: try TCPConnection(host: host, port: port))), in: \.rtsp) { $0.link.close() }
         let link = rtsp.link
         Log.debug("session") { "tcp connected, local address \(link.localAddress), session id \(rtsp.sessionID)" }
+        let pairingStarted = Clock.now()
         let encryptionKeys = try AirPlayPairing.transient(over: link)
         link.enableEncryption(outKey: encryptionKeys.write, inKey: encryptionKeys.read)
+        statsStore.recordHandshake(pairing: Clock.now() - pairingStarted)
         Log.debug("session") { "paired (transient), control channel encrypted" }
 
         _ = try rtsp.exchange("GET", uri: "/info", allowError: true)
@@ -86,6 +88,7 @@ public final class AirPlaySender {
         stateLock.unlock()
         spawn("timing", priority: .userInteractive) { [self] in timingLoop(timing) }
 
+        let setupStarted = Clock.now()
         let sessionResponse = try rtsp.exchange("SETUP", body: AirPlayRequests.session(timingPort: timing.port))
         let sessionInfo = try RTSPSession.plist(sessionResponse.body)
         Log.debug("session") { "SETUP response: \(sessionInfo.keys.sorted())" }
@@ -101,6 +104,7 @@ public final class AirPlaySender {
               let remoteControl = (granted["controlPort"] as? NSNumber)?.uint16Value,
               let dataPort = (granted["dataPort"] as? NSNumber)?.uint16Value
         else { throw AirPlayError(description: "speaker did not return stream ports") }
+        statsStore.recordHandshake(setup: Clock.now() - setupStarted)
 
         Log.debug("session") { "stream ports: data=\(dataPort) control=\(remoteControl); local control=\(control.port) timing=\(timing.port)" }
         let audio = try keep(UDPSocket(), in: \.audioSocket) { $0.close() }
@@ -164,7 +168,6 @@ public final class AirPlaySender {
             throw AirPlayError(description: "connect() first")
         }
         self.source = source
-        stats = StreamStats()
         startTimestamp = NTP.toTimestamp(NTP.now(), rate: Self.sampleRate)
         headTimestamp = startTimestamp
         sequence = UInt16.random(in: 0...UInt16.max)
@@ -174,6 +177,7 @@ public final class AirPlaySender {
         let initialSequence = sequence
         let controlPort = remoteControlPort
         stateLock.unlock()
+        statsStore.reset()
 
         let controlAddress = try UDPSocket.address(host: host, port: controlPort)
         spawn("control", priority: .userInitiated) { [self] in controlLoop(control, destination: controlAddress) }
@@ -192,11 +196,13 @@ public final class AirPlaySender {
 
     static func decibels(percent: Double) -> Double { percent <= 0 ? -144 : -30 + percent * 0.3 }
 
-    private var isRunning: Bool {
+    private func locked<T>(_ body: () -> T) -> T {
         stateLock.lock()
         defer { stateLock.unlock() }
-        return running
+        return body()
     }
+
+    private var isRunning: Bool { locked { running } }
 
     private func audioLoop(audio: UDPSocket, cipher: AudioPacketCipher, source: PCMSource, ssrc: UInt32) {
         var pacer = PacketPacer(start: Clock.now(), interval: Double(Self.framesPerPacket) / Double(Self.sampleRate))
@@ -237,10 +243,12 @@ public final class AirPlaySender {
             backlog[seqno &- UInt16(Self.backlogSize)] = nil
             sequence = seqno &+ 1
             headTimestamp += UInt64(Self.framesPerPacket)
-            stats.packetsSent += 1
-            if dropped { stats.packetsDropped += 1 }
-            stats.maxLateMilliseconds = max(stats.maxLateMilliseconds, lateMilliseconds)
             stateLock.unlock()
+            statsStore.update {
+                $0.packetsSent += 1
+                if dropped { $0.packetsDropped += 1 }
+                $0.maxLateMilliseconds = max($0.maxLateMilliseconds, lateMilliseconds)
+            }
             pacer.advance()
         }
     }
@@ -275,12 +283,12 @@ public final class AirPlaySender {
         }
     }
 
+    /// The counters as of the last second, with how long pairing and setup took. Safe from any thread.
+    public var diagnostics: SenderStats { statsStore.diagnostics }
+
     private func logStats(rtpTime: UInt32) {
-        stateLock.lock()
-        let snapshot = stats
-        let feed = source?.debugSummary ?? ""
-        stats.maxLateMilliseconds = 0
-        stateLock.unlock()
+        let snapshot = statsStore.takeSnapshot()
+        let feed = locked { source }?.debugSummary ?? ""
         Log.debug("stats") { "\(snapshot.summary(rtpTime: rtpTime)) \(feed)" }
     }
 
@@ -290,9 +298,7 @@ public final class AirPlaySender {
         let lost = UInt16(request[base + 4]) << 8 | UInt16(request[base + 5])
         let count = UInt16(request[base + 6]) << 8 | UInt16(request[base + 7])
         var destination = address
-        stateLock.lock()
-        stats.retransmitRequests += 1
-        stateLock.unlock()
+        statsStore.update { $0.retransmitRequests += 1 }
         Log.debug("control") { "retransmit request: seq \(lost) x\(count)" }
         for offset in 0..<count {
             stateLock.lock()
@@ -303,24 +309,16 @@ public final class AirPlaySender {
                 continue
             }
             try? control.send(Data([0x80, 0xD6]) + packet[2..<4] + packet, to: &destination)
-            stateLock.lock()
-            stats.retransmitPacketsServed += 1
-            stateLock.unlock()
+            statsStore.update { $0.retransmitPacketsServed += 1 }
         }
     }
 
-    private var isTimingActive: Bool {
-        stateLock.lock()
-        defer { stateLock.unlock() }
-        return timingActive
-    }
+    private var isTimingActive: Bool { locked { timingActive } }
 
     private func timingLoop(_ timing: UDPSocket) {
         while isTimingActive {
             guard let (data, from) = timing.receive(timeout: 0.25) else { continue }
-            stateLock.lock()
-            stats.timingRequests += 1
-            stateLock.unlock()
+            statsStore.update { $0.timingRequests += 1 }
             let parts = NTP.parts(NTP.now())
             var destination = from
             if let response = try? RTP.timingResponse(to: data, receivedSeconds: parts.seconds, receivedFraction: parts.fraction) {
@@ -338,20 +336,21 @@ public final class AirPlaySender {
             Thread.sleep(forTimeInterval: 2)
             guard isRunning else { return }
             do {
+                let started = Clock.now()
                 let response = try rtsp.exchange("POST", uri: "/feedback", allowError: true, timeout: Self.feedbackTimeout)
+                let roundTrip = Int((Clock.now() - started) * 1000)
                 if !(200..<300).contains(response.code), !reportedStatus {
                     reportedStatus = true
                     Log.debug("feedback") { "speaker answers keep-alives with status \(response.code); treating any answer as alive" }
                 }
                 failures = 0
-                stateLock.lock()
-                stats.feedbackSucceeded += 1
-                stateLock.unlock()
+                statsStore.update {
+                    $0.feedbackSucceeded += 1
+                    $0.keepAliveMilliseconds = roundTrip
+                }
             } catch {
                 failures += 1
-                stateLock.lock()
-                stats.feedbackFailed += 1
-                stateLock.unlock()
+                statsStore.update { $0.feedbackFailed += 1 }
                 guard isRunning else { return }
                 Log.info("feedback", "keep-alive failed (\(failures)/3): \(error)")
                 let isTimeout = (error as? NetworkError)?.description.hasPrefix("timed out") ?? false
