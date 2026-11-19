@@ -19,7 +19,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  tests:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/tests.yml
+
   release:
+    needs: tests
     runs-on: macos-latest
     timeout-minutes: 30
     permissions:
