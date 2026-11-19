@@ -718,7 +718,10 @@ def scenario_bad_proof(report):
         stderr=subprocess.PIPE,
         text=True,
     )
-    time.sleep(8)
+    deadline = time.time() + 40
+    while len(receiver.requests) < 3 and time.time() < deadline:
+        time.sleep(0.1)
+    time.sleep(2)
     process.terminate()
     log = process.communicate(timeout=15)[1]
     methods = [m for m, _ in receiver.requests]
