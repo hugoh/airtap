@@ -3,6 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key><string>AirtapApp</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundleIdentifier</key><string>net.hugoh.airtap</string>
     <key>CFBundleName</key><string>Airtap</string>
     <key>CFBundlePackageType</key><string>APPL</string>
