@@ -524,7 +524,7 @@ def scenario_reconnect(report):
         second.serve()
 
     threading.Thread(target=serve_both, daemon=True).start()
-    seconds = 14
+    seconds = 24
     process = run_sender(listener.getsockname()[1], seconds, timeout=90)
     time.sleep(0.5)
     print_log_tail(process, 14)
@@ -718,7 +718,10 @@ def scenario_bad_proof(report):
         stderr=subprocess.PIPE,
         text=True,
     )
-    time.sleep(8)
+    deadline = time.time() + 40
+    while len(receiver.requests) < 3 and time.time() < deadline:
+        time.sleep(0.1)
+    time.sleep(2)
     process.terminate()
     log = process.communicate(timeout=15)[1]
     methods = [m for m, _ in receiver.requests]

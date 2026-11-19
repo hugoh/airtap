@@ -27,6 +27,7 @@ run = "swift test"
 
 [tasks."test:e2e"]
 description = "Run the sender against the fake AirPlay speaker (set AIRTAP_E2E_CAPTURE=0 where no audio device exists)"
+env = { PYTHONUNBUFFERED = "1" }
 run = ["swift build", "./scripts/e2e.py"]
 
 [tasks.app]
