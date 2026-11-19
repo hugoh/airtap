@@ -9,8 +9,8 @@ mkdir -p "$app/Contents/MacOS"
 cp .build/release/AirtapApp "$app/Contents/MacOS/AirtapApp"
 cp Sources/AirtapApp/Info.plist "$app/Contents/Info.plist"
 if [ "${AIRTAP_VERSION:-}" != "" ]; then
-    plutil -replace CFBundleShortVersionString -string "$AIRTAP_VERSION" "$app/Contents/Info.plist"
-    plutil -replace CFBundleVersion -string "$AIRTAP_VERSION" "$app/Contents/Info.plist"
+	plutil -replace CFBundleShortVersionString -string "$AIRTAP_VERSION" "$app/Contents/Info.plist"
+	plutil -replace CFBundleVersion -string "$AIRTAP_VERSION" "$app/Contents/Info.plist"
 fi
 # Ad-hoc by default; a real identity keeps the granted permissions across rebuilds (see README).
 codesign --force --sign "${AIRTAP_SIGN_IDENTITY:--}" "$app"
