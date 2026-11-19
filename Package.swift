@@ -17,7 +17,7 @@ let package = Package(
         .executableTarget(
             name: "AirtapApp",
             dependencies: ["AirtapCore"],
-            exclude: ["Info.plist"],
+            exclude: ["Info.plist", "AppIcon.icns"],
             linkerSettings: [.unsafeFlags(["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__info_plist", "-Xlinker", "Sources/AirtapApp/Info.plist"])]
         ),
         .executableTarget(

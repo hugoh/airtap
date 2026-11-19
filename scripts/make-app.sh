@@ -8,6 +8,8 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS"
 cp .build/release/AirtapApp "$app/Contents/MacOS/AirtapApp"
 cp Sources/AirtapApp/Info.plist "$app/Contents/Info.plist"
+mkdir -p "$app/Contents/Resources"
+cp Sources/AirtapApp/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
 if [ "${AIRTAP_VERSION:-}" != "" ]; then
 	plutil -replace CFBundleShortVersionString -string "$AIRTAP_VERSION" "$app/Contents/Info.plist"
 	plutil -replace CFBundleVersion -string "$AIRTAP_VERSION" "$app/Contents/Info.plist"
