@@ -8,6 +8,9 @@ local linters = new Mapping<String, Step> {
     ...Base.base
     ...Base.python
     ...Base.shell
+    ["check_added_large_files"] = (Base.base["check_added_large_files"]) {
+        exclude = List("Sources/AirtapApp/AppIcon.icns")
+    }
     ["uv-sync"] {
         check = "uv sync"
     }
