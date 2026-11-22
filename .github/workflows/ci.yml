@@ -3,6 +3,10 @@ name: CI
 
 permissions: {}
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 on: # yamllint disable-line rule:truthy
   push:
     branches: [main]
@@ -19,9 +23,6 @@ on: # yamllint disable-line rule:truthy
 jobs:
   lint:
     timeout-minutes: 15
-    concurrency:
-      group: ci-lint-${{ github.event.pull_request.number || github.ref }}
-      cancel-in-progress: true
     permissions:
       contents: read
       packages: read
@@ -38,9 +39,6 @@ jobs:
     name: Tests
     runs-on: macos-latest
     timeout-minutes: 20
-    concurrency:
-      group: ci-test-${{ github.event.pull_request.number || github.ref }}
-      cancel-in-progress: true
     permissions:
       contents: read
     steps:
