@@ -8,8 +8,18 @@ private final class FakeSession: StreamingSession {
     private(set) var isConnecting = false
     private(set) var isStreaming = false
     private(set) var stopCount = 0
+    private(set) var volumes: [Double] = []
+    let initialVolume: Double
     private var onFailure: ((Error) -> Void)?
     private let lock = NSLock()
+
+    init(volume: Double = 30) { initialVolume = volume }
+
+    func setVolume(percent: Double) {
+        lock.lock()
+        volumes.append(percent)
+        lock.unlock()
+    }
 
     func connect() throws {
         if blocksConnectUntilStopped {
@@ -59,10 +69,10 @@ final class ReconnectingStreamTests: XCTestCase {
         ReconnectingStream(
             source: Silence(), volume: 30, retryDelay: 0.02,
             resolve: { _ in Speaker(name: "Test", host: "127.0.0.1", port: 1) },
-            makeSession: { [self] _ in
+            makeSession: { [self] _, volume in
                 lock.lock()
                 defer { lock.unlock() }
-                let session = FakeSession()
+                let session = FakeSession(volume: volume)
                 if !nextConnectErrors.isEmpty { session.connectError = nextConnectErrors.removeFirst() }
                 session.blocksConnectUntilStopped = blockNextConnect
                 sessions.append(session)
@@ -139,6 +149,20 @@ final class ReconnectingStreamTests: XCTestCase {
         stream.stop()
     }
 
+    func testVolumeChangesReachTheLiveSessionAndTheNextOne() {
+        let stream = makeStream()
+        stream.start()
+        waitUntil("first session streams") { sessionCount == 1 && session(0).isStreaming }
+
+        stream.setVolume(55)
+        XCTAssertEqual(session(0).volumes, [55])
+
+        session(0).failStream()
+        waitUntil("second session streams") { sessionCount == 2 && session(1).isStreaming }
+        XCTAssertEqual(session(1).initialVolume, 55, "a reconnect must not jump back to the starting volume")
+        stream.stop()
+    }
+
     func testStopEndsTheSessionAndTheSupervisor() {
         let stream = makeStream()
         stream.start()
@@ -175,7 +199,7 @@ final class ReconnectingStreamTests: XCTestCase {
                 while !isCancelled() { Thread.sleep(forTimeInterval: 0.005) }
                 throw AirPlayError(description: "lookup cancelled")
             },
-            makeSession: { _ in FakeSession() }
+            makeSession: { _, _ in FakeSession() }
         )
         stream.start()
         lookupStarted.wait()

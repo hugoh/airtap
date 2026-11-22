@@ -23,7 +23,7 @@ public final class StreamSession {
 
     private let app: String
     private let speakerName: String
-    private let volume: Double
+    private var volume: Double
     private let tap = TapFeed()
     private var router: Router?
     private var stream: ReconnectingStream?
@@ -70,6 +70,12 @@ public final class StreamSession {
         )
         startMeter(stream: stream, feed: feed, sampleRate: Int(format.mSampleRate), router: router)
         stream.start()
+    }
+
+    /// Takes effect immediately when streaming, and on any reconnect.
+    public func setVolume(_ percent: Double) {
+        volume = percent
+        stream?.setVolume(percent)
     }
 
     public func stop() {
