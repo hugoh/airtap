@@ -23,7 +23,9 @@ final class Model: ObservableObject {
     private(set) var icons: [String: NSImage] = [:]
     private var userChoseSpeaker = false
     private var isApplyingSelection = false
-    @Published var volume = 30.0
+    @Published var volume = 30.0 {
+        didSet { session?.setVolume(volume) }
+    }
     @Published var status = "Idle"
     @Published var health: StreamHealth?
     @Published var failed = false
@@ -160,7 +162,6 @@ struct MenuView: View {
             HStack {
                 Text("Volume")
                 Slider(value: $model.volume, in: 0...100)
-                    .disabled(model.isStreaming)
             }
             HStack {
                 Button(model.isStreaming ? "Stop" : "Start") { model.toggle() }
@@ -173,8 +174,21 @@ struct MenuView: View {
                 Text(model.indicator.text).font(.caption).foregroundStyle(.secondary).lineLimit(3)
             }
             if let health = model.health {
-                DisclosureGroup("Details", isExpanded: $model.showDetails) { DetailsView(health: health) }
-                    .font(.caption)
+                VStack(alignment: .leading, spacing: 6) {
+                    Button {
+                        model.showDetails.toggle()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: model.showDetails ? "chevron.down" : "chevron.right").frame(width: 10)
+                            Text("Details")
+                            Spacer()
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    if model.showDetails { DetailsView(health: health).padding(.leading, 14) }
+                }
+                .font(.caption)
             }
             Divider()
             Toggle("Debug log", isOn: $model.debug).font(.caption)
@@ -186,7 +200,30 @@ struct MenuView: View {
         }
         .padding(12)
         .frame(width: 330)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(WindowFitter(trigger: [model.showDetails, model.health != nil]))
         .onAppear { model.refresh() }
+    }
+}
+
+/// A menu bar window keeps the tallest height it has had, so after the content shrinks it is resized to fit, top edge fixed.
+struct WindowFitter: NSViewRepresentable {
+    let trigger: [Bool]
+
+    func makeNSView(context: Context) -> NSView { NSView() }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        DispatchQueue.main.async {
+            guard let window = view.window, let content = window.contentView else { return }
+            let fitting = content.fittingSize.height
+            let delta = window.contentLayoutRect.height - fitting
+            guard abs(delta) > 1 else { return }
+            var frame = window.frame
+            frame.size.height -= delta
+            frame.origin.y += delta
+            window.setFrame(frame, display: true)
+        }
     }
 }
 

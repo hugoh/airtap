@@ -6,6 +6,7 @@ protocol StreamingSession: AnyObject {
     func connect() throws
     func startStreaming(source: PCMSource, onFailure: @escaping (Error) -> Void) throws
     func stop()
+    func setVolume(percent: Double)
     var senderStats: SenderStats? { get }
 }
 
@@ -40,7 +41,8 @@ public final class ReconnectingStream {
     private let source: PCMSource
     private let retryDelay: TimeInterval
     private let resolve: Resolve
-    private let makeSession: (Speaker) -> StreamingSession
+    private let makeSession: (Speaker, Double) -> StreamingSession
+    private var volume: Double
 
     private let condition = NSCondition()
     private var stopped = false
@@ -69,12 +71,13 @@ public final class ReconnectingStream {
 
     public convenience init(source: PCMSource, volume: Double, resolve: @escaping Resolve) {
         self.init(source: source, volume: volume, retryDelay: 1, resolve: resolve) {
-            AirPlaySender(host: $0.host, port: $0.port, volumePercent: volume)
+            AirPlaySender(host: $0.host, port: $0.port, volumePercent: $1)
         }
     }
 
-    init(source: PCMSource, volume: Double, retryDelay: TimeInterval, resolve: @escaping Resolve, makeSession: @escaping (Speaker) -> StreamingSession) {
+    init(source: PCMSource, volume: Double, retryDelay: TimeInterval, resolve: @escaping Resolve, makeSession: @escaping (Speaker, Double) -> StreamingSession) {
         self.source = source
+        self.volume = volume
         self.retryDelay = retryDelay
         self.resolve = resolve
         self.makeSession = makeSession
@@ -106,6 +109,15 @@ public final class ReconnectingStream {
         condition.unlock()
     }
 
+    /// Applies to the stream now and to every session that replaces it.
+    public func setVolume(_ percent: Double) {
+        let session = locked { () -> StreamingSession? in
+            volume = percent
+            return connectedSince == nil ? nil : current
+        }
+        session?.setVolume(percent: percent)
+    }
+
     /// Drops the current session and connects again, e.g. after the Mac wakes from sleep.
     /// Requests that arrive before the reconnect happens are satisfied by that one reconnect.
     public func restart(reason: String) {
@@ -128,7 +140,7 @@ public final class ReconnectingStream {
             var session: StreamingSession?
             do {
                 let speaker = try resolve { [self] in isStopped }
-                let candidate = makeSession(speaker)
+                let candidate = makeSession(speaker, locked { volume })
                 session = candidate
                 guard adopt(candidate) else { break }
                 try candidate.connect()

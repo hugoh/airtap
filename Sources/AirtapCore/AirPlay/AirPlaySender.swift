@@ -16,7 +16,7 @@ public final class AirPlaySender {
     private static let maxConsecutiveDrops = 250
     private let host: String
     private let port: UInt16
-    private let volumePercent: Double
+    private var volumePercent: Double
 
     private let stateLock = NSLock()
     private var rtsp: RTSPSession?
@@ -188,12 +188,26 @@ public final class AirPlaySender {
         try rtsp.exchange("FLUSH", headers: [
             ("Range", "npt=0-"), ("Session", "0"), ("RTP-Info", "seq=\(initialSequence);rtptime=\(Self.latency)"),
         ])
-        try rtsp.exchange("SET_PARAMETER", contentType: "text/parameters", text: "volume: \(Self.decibels(percent: volumePercent))")
+        try rtsp.exchange("SET_PARAMETER", contentType: "text/parameters", text: "volume: \(Self.decibels(percent: locked { volumePercent }))")
 
         spawn("feedback", priority: .utility) { [self] in feedbackLoop(rtsp) }
         // Pacing audio is the one job here that must not wait behind other work.
         spawn("audio", priority: .userInteractive) { [self] in audioLoop(audio: audio, cipher: cipher, source: source, ssrc: rtsp.sessionID) }
-        Log.info("stream", "streaming started (volume \(Int(volumePercent))%)")
+        Log.info("stream", "streaming started (volume \(Int(locked { volumePercent }))%)")
+    }
+
+    /// Changes the volume mid-stream. Before streaming starts it only sets the volume the stream will begin with.
+    public func setVolume(percent: Double) {
+        let (rtsp, live) = locked { () -> (RTSPSession?, Bool) in
+            volumePercent = percent
+            return (self.rtsp, running)
+        }
+        guard live, let rtsp else { return }
+        do {
+            try rtsp.exchange("SET_PARAMETER", contentType: "text/parameters", text: "volume: \(Self.decibels(percent: percent))")
+        } catch {
+            Log.info("stream", "could not change the volume: \(error)")
+        }
     }
 
     /// 0 is the speaker's mute (-144 dB) and 100 is full scale. Anything else, including NaN, stays inside that range.
