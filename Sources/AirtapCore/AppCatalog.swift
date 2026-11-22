@@ -28,6 +28,9 @@ public struct ListedApp: Identifiable, Equatable {
 }
 
 public enum AppCatalog {
+    /// Apple Music clients such as Albums hand playback to this system service, so their own process stays silent.
+    public static let musicPlayerService = ListedApp(bundleID: "com.apple.MediaPlayer.RemotePlayerService", name: "Apple Music playback", isPlaying: false)
+
     /// Folds audio processes (`com.electron.pocket-casts.helper`, ...) into the running apps that own them and hides
     /// the ones nobody owns, such as system daemons. Background agents show up only while they are playing, and
     /// `excluding` (the app itself) never does, and `keeping` (the app being streamed) always does. Playing apps come first.
@@ -45,7 +48,11 @@ public enum AppCatalog {
             visible[keeping] = false
             owners[keeping] = app
         }
-        return visible.map { ListedApp(bundleID: $0.key, name: owners[$0.key]?.name ?? $0.key, isPlaying: $0.value) }
+        var apps = visible.map { ListedApp(bundleID: $0.key, name: owners[$0.key]?.name ?? $0.key, isPlaying: $0.value) }
+        if let service = audio.first(where: { $0.bundleID == musicPlayerService.bundleID }) {
+            apps.append(ListedApp(bundleID: service.bundleID, name: musicPlayerService.name, isPlaying: service.isPlaying))
+        }
+        return apps
             .sorted { ($0.isPlaying ? 0 : 1, $0.name.lowercased()) < ($1.isPlaying ? 0 : 1, $1.name.lowercased()) }
     }
 
