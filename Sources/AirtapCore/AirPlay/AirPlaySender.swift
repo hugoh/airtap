@@ -10,7 +10,7 @@ public final class AirPlaySender {
     private static let framesPerPacket = AirPlayRequests.framesPerPacket
     private static let latency: UInt64 = 22050 + 44100
     private static let backlogSize = 1000
-    private static let feedbackTimeout: TimeInterval = 3
+    static let feedbackTimeout: TimeInterval = 3
     private static let teardownTimeout: TimeInterval = 2
     /// Two seconds of packets the kernel refused in a row is no longer a hiccup.
     private static let maxConsecutiveDrops = 250
@@ -34,7 +34,7 @@ public final class AirPlaySender {
     private var headTimestamp: UInt64 = 0
     private var sequence: UInt16 = 0
     private var backlog: [UInt16: Data] = [:]
-    private let statsStore = StatsStore()
+    let statsStore = StatsStore()
     private var source: PCMSource?
 
     public init(host: String, port: UInt16, volumePercent: Double = 30) {
@@ -219,7 +219,7 @@ public final class AirPlaySender {
         return body()
     }
 
-    private var isRunning: Bool { locked { running } }
+    var isRunning: Bool { locked { running } }
 
     private func audioLoop(audio: UDPSocket, cipher: AudioPacketCipher, source: PCMSource, ssrc: UInt32) {
         var pacer = PacketPacer(start: Clock.now(), interval: Double(Self.framesPerPacket) / Double(Self.sampleRate))
@@ -344,39 +344,7 @@ public final class AirPlaySender {
         }
     }
 
-    /// Keeps the session alive. Any reply, whatever its status, shows the speaker is there: some receivers do not
-    /// implement `/feedback` and answer with an error. Only a dead or silent connection ends the session.
-    private func feedbackLoop(_ rtsp: RTSPSession) {
-        var failures = 0
-        var reportedStatus = false
-        while isRunning {
-            Thread.sleep(forTimeInterval: 2)
-            guard isRunning else { return }
-            do {
-                let started = Clock.now()
-                let response = try rtsp.exchange("POST", uri: "/feedback", allowError: true, timeout: Self.feedbackTimeout)
-                let roundTrip = Int((Clock.now() - started) * 1000)
-                if !(200..<300).contains(response.code), !reportedStatus {
-                    reportedStatus = true
-                    Log.debug("feedback") { "speaker answers keep-alives with status \(response.code); treating any answer as alive" }
-                }
-                failures = 0
-                statsStore.update {
-                    $0.feedbackSucceeded += 1
-                    $0.keepAliveMilliseconds = roundTrip
-                }
-            } catch {
-                failures += 1
-                statsStore.update { $0.feedbackFailed += 1 }
-                guard isRunning else { return }
-                Log.info("feedback", "keep-alive failed (\(failures)/3): \(error)")
-                let isTimeout = (error as? NetworkError)?.description.hasPrefix("timed out") ?? false
-                if !isTimeout || failures >= 3 { return fail(AirPlayError(description: "speaker stopped responding (\(error))"), from: "feedback") }
-            }
-        }
-    }
-
-    private func fail(_ error: Error, from origin: String) {
+    func fail(_ error: Error, from origin: String) {
         stateLock.lock()
         let callback = running ? failure : nil
         running = false
