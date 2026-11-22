@@ -39,6 +39,18 @@ final class Model: ObservableObject {
 
     var isStreaming: Bool { session != nil }
 
+    func quit() {
+        if isStreaming {
+            let alert = NSAlert()
+            alert.messageText = "Quit airtap?"
+            alert.informativeText = "Audio is streaming to \(speaker) and will stop."
+            alert.addButton(withTitle: "Quit")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        NSApplication.shared.terminate(nil)
+    }
+
     init() {
         let file = Log.fileSink(url: Self.logURL, maxBytes: 2 * 1024 * 1024)
         Log.sink = { line in
@@ -195,7 +207,7 @@ struct MenuView: View {
             HStack {
                 Button("Open log") { NSWorkspace.shared.open(Model.logURL) }.font(.caption)
                 Spacer()
-                Button("Quit") { NSApplication.shared.terminate(nil) }
+                Button("Quit") { model.quit() }
             }
         }
         .padding(12)
