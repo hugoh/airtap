@@ -91,6 +91,10 @@ final class Model: ObservableObject {
             image.size = Self.iconSize
             icons[app.bundleID] = image
         }
+        if let image = NSImage(systemSymbolName: "waveform", accessibilityDescription: nil) {
+            image.size = Self.iconSize
+            icons[AppCatalog.musicPlayerService.bundleID] = image
+        }
         Log.debug("app") { "apps with audio: \(self.apps.map { "\($0.name)\($0.isPlaying ? "*" : "")" }), icons for \(self.icons.count) running apps" }
         // The app that was selected may have stopped making sound; keep it only if it is still listed.
         if !apps.contains(where: { $0.bundleID == app }) { app = apps.first?.bundleID ?? "" }

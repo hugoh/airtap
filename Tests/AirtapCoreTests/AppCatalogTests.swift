@@ -23,6 +23,11 @@ final class AppCatalogTests: XCTestCase {
         XCTAssertEqual(listed.map(\.name), ["Music"])
     }
 
+    func testTheSystemMusicPlayerIsListedBecauseAppsLikeAlbumsPlayThroughIt() {
+        let listed = AppCatalog.listed(audio: audio([("com.apple.MediaPlayer.RemotePlayerService", true), ("com.apple.audiomxd", false)]), running: running)
+        XCTAssertEqual(listed, [ListedApp(bundleID: "com.apple.MediaPlayer.RemotePlayerService", name: "Apple Music playback", isPlaying: true)])
+    }
+
     func testAppIsPlayingIfAnyOfItsProcessesIs() {
         let listed = AppCatalog.listed(
             audio: audio([("com.google.Chrome", false), ("com.google.Chrome.helper", true), ("com.google.Chrome.helper.Renderer", false)]),
