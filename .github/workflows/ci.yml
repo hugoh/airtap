@@ -1,8 +1,12 @@
 ---
-name: Release
+name: CI
+
+permissions: {}
 
 on: # yamllint disable-line rule:truthy
   push:
+    branches: [main]
+  pull_request:
     branches: [main]
   workflow_dispatch:
     inputs:
@@ -12,20 +16,58 @@ on: # yamllint disable-line rule:truthy
         default: auto
         options: [auto, patch, minor, major]
 
-permissions: {}
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
-  tests:
+  lint:
+    timeout-minutes: 15
+    concurrency:
+      group: ci-lint-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
     permissions:
       contents: read
-    uses: ./.github/workflows/tests.yml
+      packages: read
+      statuses: write
+    # SwiftLint needs SourceKit, which the macOS runners ship.
+    runs-on: macos-latest
+    steps:
+      - uses: hugoh/gh-workflows/setup@7d30b69fa8ffc72ed90e3ba09aa2ff977ef6328e # v1.40.21
+      - uses: hugoh/gh-workflows/hk-check@7d30b69fa8ffc72ed90e3ba09aa2ff977ef6328e # v1.40.21
+        env:
+          PINACT_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  test:
+    name: Tests
+    runs-on: macos-latest
+    timeout-minutes: 20
+    concurrency:
+      group: ci-test-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+    steps:
+      - uses: hugoh/gh-workflows/setup@7d30b69fa8ffc72ed90e3ba09aa2ff977ef6328e # v1.40.21
+      - run: mise run test:unit
+      # Hosted runners have no audio device or capture permission, so the two tap scenarios are skipped there.
+      - run: mise run test:e2e
+        env:
+          AIRTAP_E2E_CAPTURE: "0"
+
+  ci-gate:
+    if: always()
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - uses: re-actors/alls-green@b5b5b37504aa4183270bd3d855c52a67f212be35 # v1.3.0
+        with:
+          jobs: ${{ toJSON(needs) }}
 
   release:
-    needs: tests
+    needs: ci-gate
+    if: github.event_name != 'pull_request'
+    concurrency:
+      group: release
+      cancel-in-progress: false
     runs-on: macos-latest
     timeout-minutes: 30
     permissions:
