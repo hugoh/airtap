@@ -29,7 +29,6 @@ final class Model: ObservableObject {
     @Published var status = "Idle"
     @Published var health: StreamHealth?
     @Published var failed = false
-    @Published var showDetails = false
     @Published var isScanning = false
     @Published var isStopping = false
     @Published var debug = Log.isDebugEnabled {
@@ -156,7 +155,10 @@ final class Model: ObservableObject {
 }
 
 struct MenuView: View {
+    static let detailsWindowID = "details"
+
     @ObservedObject var model: Model
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -189,20 +191,10 @@ struct MenuView: View {
                 Circle().fill(model.indicator.color).frame(width: 8, height: 8)
                 Text(model.indicator.text).font(.caption).foregroundStyle(.secondary).lineLimit(3)
             }
-            if let health = model.health {
-                VStack(alignment: .leading, spacing: 6) {
-                    Button {
-                        model.showDetails.toggle()
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: model.showDetails ? "chevron.down" : "chevron.right").frame(width: 10)
-                            Text("Details")
-                            Spacer()
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    if model.showDetails { DetailsView(health: health).padding(.leading, 14) }
+            if model.health != nil {
+                Button("Technical details…") {
+                    openWindow(id: Self.detailsWindowID)
+                    NSApplication.shared.activate(ignoringOtherApps: true)
                 }
                 .font(.caption)
             }
@@ -218,7 +210,7 @@ struct MenuView: View {
         .frame(width: 330)
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(WindowFitter(trigger: [model.showDetails, model.health != nil]))
+        .background(WindowFitter(trigger: [model.health != nil]))
         .onAppear { model.refresh() }
     }
 }
@@ -240,6 +232,22 @@ struct WindowFitter: NSViewRepresentable {
             frame.origin.y += delta
             window.setFrame(frame, display: true)
         }
+    }
+}
+
+struct DetailsWindow: View {
+    @ObservedObject var model: Model
+
+    var body: some View {
+        Group {
+            if let health = model.health {
+                DetailsView(health: health)
+            } else {
+                Text("No active stream").foregroundStyle(.secondary)
+            }
+        }
+        .padding(16)
+        .frame(minWidth: 320, alignment: .topLeading)
     }
 }
 
@@ -265,7 +273,6 @@ struct DetailsView: View {
             }
         }
         .font(.caption)
-        .padding(.top, 4)
     }
 }
 
@@ -287,5 +294,7 @@ struct AirtapApp: App {
     var body: some Scene {
         MenuBarExtra("airtap", systemImage: "airplayaudio") { MenuView(model: model) }
             .menuBarExtraStyle(.window)
+        Window("Technical Details", id: MenuView.detailsWindowID) { DetailsWindow(model: model) }
+            .windowResizability(.contentSize)
     }
 }
